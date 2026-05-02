@@ -28,6 +28,23 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return handleUndo(args.Path)
 	}
 
+	// insert_file: read file and treat as insert op
+	if args.InsertFile != "" {
+		insertPath := server.ResolvePath(args.InsertFile)
+		data, err := os.ReadFile(insertPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read insert_file: %v", err)
+		}
+		line := args.InsertLine
+		if line < 1 {
+			line = 1
+		}
+		args.Inserts = append(args.Inserts, InsertOp{
+			Line: line,
+			Text: string(data),
+		})
+	}
+
 	if len(args.Edits) == 0 && len(args.Inserts) == 0 && args.AppendText == "" {
 		return nil, fmt.Errorf("at least one edit, insert, or append_text is required")
 	}
@@ -113,7 +130,7 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 		for _, r := range results {
 			if !r.Success {
 				// #2: mark as fail_fast blocked
-				return buildResponse(args.Path, original, content, content, results, true, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, true)
+				return buildResponse(args.Path, original, content, content, results, true, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, true, args.Terse)
 			}
 		}
 	}
@@ -139,7 +156,7 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 		current = applyReplacement(current, r)
 	}
 
-	return buildResponse(args.Path, original, content, current, results, args.DryRun, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false)
+	return buildResponse(args.Path, original, content, current, results, args.DryRun, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false, args.Terse)
 }
 
 func computeResults(content []byte, inserts []InsertOp, edits []EditOp) []editResult {
@@ -381,16 +398,32 @@ func applyReplacement(content []byte, r editResult) []byte {
 	return out
 }
 
-func buildResponse(path string, original, formatted, current []byte, results []editResult, dryRun bool, diffCtx int, skipValidate, showDiff bool, echoLines int, failFastBlocked bool) (*server.ToolCallResult, error) {
+func buildResponse(path string, original, formatted, current []byte, results []editResult, dryRun bool, diffCtx int, skipValidate, showDiff bool, echoLines int, failFastBlocked, terse bool) (*server.ToolCallResult, error) {
 	var buf bytes.Buffer
-	anyChange := false
 	successCount := 0
+	failCount := 0
 	for _, r := range results {
 		if r.Success {
-			anyChange = true
 			successCount++
+		} else {
+			failCount++
 		}
 	}
+
+	if terse {
+		if failCount > 0 {
+			var errs []string
+			for _, r := range results {
+				if !r.Success {
+					errs = append(errs, r.Error)
+				}
+			}
+			return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[FAIL] %d/%d edits: %s", successCount, len(results), strings.Join(errs, "; "))}}}, nil
+		}
+		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[OK] %d/%d edits applied to %s", successCount, len(results), path)}}}, nil
+	}
+
+	anyChange := successCount > 0
 
 	// #2: fail_fast blocked overrides success count
 	if failFastBlocked {
@@ -555,7 +588,7 @@ func confTier(s string) string {
 	case "substring_fuzzy":
 		return "\u2713"
 	case "insert":
-		return ""
+		return "(new)"
 	default:
 		return ""
 	}

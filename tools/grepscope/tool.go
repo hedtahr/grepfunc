@@ -24,6 +24,7 @@ var Tool = server.Tool{
 			"case_sensitive": {Type: "boolean", Description: "Default false."},
 			"context_lines":  {Type: "integer", Description: "Lines of context around each match. Default 2, max 8."},
 			"kind":           {Type: "string", Description: "Symbol kind: 'func', 'type', or 'any' (default)."},
+			"token_budget":  {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line:match only. No default (unlimited)."},
 		},
 		Required: []string{"pattern", "symbol"},
 	},
@@ -37,6 +38,7 @@ type args struct {
 	CaseSensitive bool   `json:"case_sensitive"`
 	ContextLines  int    `json:"context_lines"`
 	Kind          string `json:"kind"`
+	TokenBudget   int    `json:"token_budget"`
 }
 
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
@@ -109,12 +111,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	for _, sym := range symbols {
 		rel := server.RelPath(sym.File)
 		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(sym.File)), ".")
-		lines := strings.Split(sym.Body, "\n")
 		ctx := a.ContextLines
 
-		// Collect hit indices
+		// Use sym.Body directly — already available from grepfunc.Search
+		bodyLines := strings.Split(sym.Body, "\n")
 		var hitIdxs []int
-		for i, line := range lines {
+		for i, line := range bodyLines {
 			if patRe.MatchString(line) {
 				hitIdxs = append(hitIdxs, i)
 			}
@@ -140,7 +142,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		var windows []window
 		for _, idx := range hitIdxs {
 			ws := max(0, idx-ctx)
-			we := min(len(lines)-1, idx+ctx)
+			we := min(len(bodyLines)-1, idx+ctx)
 			if len(windows) > 0 && ws <= windows[len(windows)-1].end+1 {
 				last := &windows[len(windows)-1]
 				last.end = max(last.end, we)
@@ -155,9 +157,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			for i := w.start; i <= w.end; i++ {
 				absLine := startLine + i
 				if w.matches[i] {
-					fmt.Fprintf(&buf, "> L%d: %s\n", absLine, lines[i])
+					fmt.Fprintf(&buf, "> L%d: %s\n", absLine, bodyLines[i])
 				} else {
-					fmt.Fprintf(&buf, "  L%d: %s\n", absLine, lines[i])
+					fmt.Fprintf(&buf, "  L%d: %s\n", absLine, bodyLines[i])
 				}
 			}
 			buf.WriteString("```\n\n")
@@ -170,7 +172,30 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}, nil
 	}
 
+	output := buf.String()
+	if totalMatches > 0 && a.TokenBudget > 0 && len(output) > a.TokenBudget {
+		var terse strings.Builder
+		for _, sym := range symbols {
+			rel := server.RelPath(sym.File)
+			lines := strings.Split(sym.Body, "\n")
+			startLine := sym.Line
+			if startLine == 0 {
+				startLine = 1
+			}
+			for i, line := range lines {
+				if patRe.MatchString(line) {
+					fmt.Fprintf(&terse, "%s:%d: %s\n", rel, startLine+i, strings.TrimSpace(line))
+				}
+			}
+		}
+		output = terse.String()
+		if len(output) > a.TokenBudget {
+			output = output[:a.TokenBudget]
+		}
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
+	}
+
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
+		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 	}, nil
 }

@@ -59,10 +59,10 @@ func wsFuzzyMatch(content []byte, oldText string, lt []int) []MatchLoc {
 		}
 	}
 	normContent := strings.TrimSpace(normBuf.String())
-	// Adjust origForNorm for TrimSpace prefix
-	trimPrefix := normBuf.Len() - len(normContent)
-	if trimPrefix > 0 && len(origForNorm) > trimPrefix {
-		origForNorm = origForNorm[trimPrefix:]
+	// Trim trailing whitespace entries from origForNorm (leading WS never recorded by normBuf.Len()>0 guard)
+	trailingTrim := normBuf.Len() - len(normContent)
+	if trailingTrim > 0 && len(origForNorm) > trailingTrim {
+		origForNorm = origForNorm[:len(origForNorm)-trailingTrim]
 	}
 
 	normOld := collapse(oldText)
@@ -172,15 +172,26 @@ func lineFuzzyMatch(content []byte, oldText string) []MatchLoc {
 func subFuzzyMatch(content []byte, oldText string, lt []int) []MatchLoc {
 	minLen := min(len(oldText), 20)
 	longest := ""
-	for start := 0; start < len(oldText); start++ {
-		for end := start + minLen; end <= len(oldText); end++ {
-			sub := oldText[start:end]
-			if bytes.Contains(content, []byte(sub)) {
-				if len(sub) > len(longest) {
-					longest = sub
+
+	// Fast heuristic for long old_text: use longest non-empty trimmed line
+	if len(oldText) > 200 {
+		for _, line := range strings.Split(oldText, "\n") {
+			t := strings.TrimSpace(line)
+			if len(t) > len(longest) && bytes.Contains(content, []byte(t)) {
+				longest = t
+			}
+		}
+	} else {
+		for start := 0; start < len(oldText); start++ {
+			for end := start + minLen; end <= len(oldText); end++ {
+				sub := oldText[start:end]
+				if bytes.Contains(content, []byte(sub)) {
+					if len(sub) > len(longest) {
+						longest = sub
+					}
+				} else {
+					break
 				}
-			} else {
-				break
 			}
 		}
 	}

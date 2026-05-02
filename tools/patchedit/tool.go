@@ -23,6 +23,9 @@ var Tool = server.Tool{
 			"append_text":       {Type: "string", Description: "Text to append to the end of the file. Applied after all edits/inserts. A newline separator is added automatically if the file doesn't end with one."},
 			"no_diff":           {Type: "boolean", Description: "If true, omit the diff block from the response. Shows only the edit summary line. Reduces token usage for confirmation-only workflows."},
 			"echo_lines":        {Type: "integer", Description: "Lines of context around first edit point in result echo. Default 3. Set 0 to disable (saves ~50 tokens). Eliminates a follow-up file_head call to verify the result."},
+			"terse":             {Type: "boolean", Description: "If true, return minimal output. Just '[OK] N/N edits applied' or '[FAIL] errors'. No diff, no per-edit table, no echo_lines."},
+			"insert_file":       {Type: "string", Description: "Path to a file whose contents should be inserted. Reads the file and treats it as an insert operation at the specified line."},
+			"insert_line":       {Type: "integer", Description: "Line number to insert the file contents before. Default 1."},
 		},
 		Required: []string{"path"},
 	},
@@ -54,6 +57,9 @@ type EditFileArgs struct {
 	AppendText      string     `json:"append_text"`
 	NoDiff          bool       `json:"no_diff"`
 	EchoLines       int        `json:"echo_lines"`
+	Terse           bool       `json:"terse"`
+	InsertFile      string     `json:"insert_file"`
+	InsertLine      int        `json:"insert_line"`
 }
 
 type MatchLoc struct {

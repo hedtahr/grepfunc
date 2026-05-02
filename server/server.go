@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,25 @@ var ProjectRoot = "."
 var LastPath = ""
 
 func SetLastPath(p string) { LastPath = p }
+
+// SessionCache is a cross-tool cache for expensive lookups (e.g., symbol bodies).
+var (
+	SessionCache   = map[string]any{}
+	SessionCacheMu sync.RWMutex
+)
+
+func CacheSet(key string, val any) {
+	SessionCacheMu.Lock()
+	SessionCache[key] = val
+	SessionCacheMu.Unlock()
+}
+
+func CacheGet(key string) (any, bool) {
+	SessionCacheMu.RLock()
+	v, ok := SessionCache[key]
+	SessionCacheMu.RUnlock()
+	return v, ok
+}
 
 func New(name, version string) *Server {
 	return &Server{name: name, version: version}
@@ -71,7 +91,9 @@ func (s *Server) handle(req Request) *Response {
 				URI string `json:"uri"`
 			} `json:"roots"`
 		}
-		json.Unmarshal(req.Params, &initParams)
+		if err := json.Unmarshal(req.Params, &initParams); err != nil {
+			fmt.Fprintf(os.Stderr, "[mcp] json.Unmarshal initialize: %v\n", err)
+		}
 		root := initParams.RootPath
 		if root == "" {
 			root = initParams.RootURI
@@ -114,7 +136,9 @@ func (s *Server) handle(req Request) *Response {
 
 	case "tools/call":
 		var params CallToolParams
-		json.Unmarshal(req.Params, &params)
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			fmt.Fprintf(os.Stderr, "[mcp] json.Unmarshal tools/call: %v\n", err)
+		}
 		args := params.Arguments
 		if len(args) == 0 {
 			args = params.Args

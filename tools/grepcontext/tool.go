@@ -29,6 +29,8 @@ var Tool = server.Tool{
 			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
 			"scope":          {Type: "boolean", Description: "Annotate each match with enclosing function/type name. Default false."},
 			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of one header per match. Format: '### path/file.go (N matches)'. Reduces noise for multi-file searches. Default false."},
+			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode."},
+			"token_budget":  {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited)."},
 		},
 		Required: []string{"pattern"},
 	},
@@ -45,6 +47,8 @@ type args struct {
 	Compact       bool   `json:"compact"`
 	Scope         bool   `json:"scope"`
 	GroupByFile   bool   `json:"group_by_file"`
+	NamesOnly     bool   `json:"names_only"`
+	TokenBudget   int    `json:"token_budget"`
 }
 
 type window struct {
@@ -238,7 +242,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 	}
 
-	if a.GroupByFile {
+	if a.NamesOnly {
+		for _, w := range page {
+			fmt.Fprintf(&sb, "%s:%d\n", w.relPath, w.matchLine)
+		}
+	} else if a.GroupByFile {
 		type fileGroup struct {
 			relPath string
 			windows []window
@@ -278,8 +286,39 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		server.SetLastPath(resolved)
 	}
 
+	output := sb.String()
+	if a.TokenBudget > 0 && len(output) > a.TokenBudget {
+		// Rebuild in names_only style: file:line only
+		var terse strings.Builder
+		suffix := ""
+		if !scannedAll {
+			suffix = "+"
+		}
+		fmt.Fprintf(&terse, "%d%s matches %q", total, suffix, a.Pattern)
+		if a.Offset > 0 || end < total {
+			fmt.Fprintf(&terse, " (showing %d\u2013%d)", start+1, end)
+		}
+		terse.WriteByte('\n')
+		for _, w := range page {
+			rel := w.relPath
+			if w.scope != "" {
+				fmt.Fprintf(&terse, "%s:%d [%s]\n", rel, w.matchLine, w.scope)
+			} else {
+				fmt.Fprintf(&terse, "%s:%d\n", rel, w.matchLine)
+			}
+		}
+		if end < total {
+			fmt.Fprintf(&terse, "%d more. Use offset=%d.\n", total-end, end)
+		}
+		output = terse.String()
+		if len(output) > a.TokenBudget {
+			output = output[:a.TokenBudget]
+		}
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
+	}
+
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
+		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 	}, nil
 }
 

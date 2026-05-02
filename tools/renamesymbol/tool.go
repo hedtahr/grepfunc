@@ -121,15 +121,23 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		totalReplacements += len(matches)
 
 		if !a.DryRun {
-			if err := os.Rename(path, path+".rename_bak"); err != nil {
-				return fmt.Errorf("backup failed for %s: %v", rel, err)
-			}
-			if err := os.WriteFile(path, newData, info.Mode()); err != nil {
-				// Restore backup on write failure
-				_ = os.Rename(path+".rename_bak", path)
+			bp := backupPath(path)
+			os.MkdirAll(filepath.Dir(bp), 0755)
+			// Rotate backups (3 levels: .bak, .bak.1, .bak.2)
+			os.Rename(bp+".2", bp+".3")
+			os.Rename(bp+".1", bp+".2")
+			os.Rename(bp, bp+".1")
+			os.WriteFile(bp, data, 0644)
+			// Atomic write via tmp + rename
+			tmpPath := path + ".tmp"
+			os.Remove(tmpPath)
+			if err := os.WriteFile(tmpPath, newData, info.Mode()); err != nil {
 				return fmt.Errorf("write failed for %s: %v", rel, err)
 			}
-			_ = os.Remove(path + ".rename_bak")
+			if err := os.Rename(tmpPath, path); err != nil {
+				_ = os.WriteFile(path, newData, info.Mode())
+				return fmt.Errorf("rename failed for %s: %v", rel, err)
+			}
 		}
 		return nil
 	})
@@ -163,4 +171,10 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
 	}, nil
+}
+
+func backupPath(path string) string {
+	rel := server.RelPath(path)
+	encoded := strings.ReplaceAll(rel, "/", "_")
+	return filepath.Join(server.ProjectRoot, ".patch_backup", encoded+".bak")
 }

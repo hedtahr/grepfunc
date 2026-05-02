@@ -26,6 +26,7 @@ var Tool = server.Tool{
 			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line:name — no code blocks. Cheapest mode."},
 			"body":           {Type: "boolean", Description: "If true, return the full body of each matched symbol. Eliminates the find_symbol → read_symbol two-step. Default false (signature only)."},
+			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only. No default (unlimited)."},
 			"summary":        {Type: "boolean", Description: "If true and body=true, truncate large bodies: shows first+last N lines with omission count."},
 			"summary_lines":  {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
 		},
@@ -45,6 +46,7 @@ type args struct {
 	Body          bool   `json:"body"`
 	Summary       bool   `json:"summary"`
 	SummaryLines  int    `json:"summary_lines"`
+	TokenBudget   int    `json:"token_budget"`
 }
 
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
@@ -102,62 +104,78 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 	}
 
+	// Cache results for read_symbol
+	for _, r := range results {
+		server.CacheSet("symbol:"+r.File+":"+r.Name, r)
+	}
+
 	// Limit
 	if len(results) > a.MaxResults {
 		results = results[:a.MaxResults]
 	}
 
-	compact := a.Compact
-	var buf strings.Builder
-	if len(results) == 0 {
-		fmt.Fprintf(&buf, "No symbols found for %q.\n", a.Name)
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
-		}, nil
+	buildOutput := func(namesOnly bool) string {
+		compact := a.Compact
+		var buf strings.Builder
+		if len(results) == 0 {
+			fmt.Fprintf(&buf, "No symbols found for %q.\n", a.Name)
+			return buf.String()
+		}
+
+		if !namesOnly {
+			if compact {
+				fmt.Fprintf(&buf, "%d symbols %q:\n", len(results), a.Name)
+			} else {
+				fmt.Fprintf(&buf, "%d symbol(s) matching %q:\n\n", len(results), a.Name)
+			}
+		}
+		for _, m := range results {
+			rel := server.RelPath(m.File)
+			if namesOnly {
+				fmt.Fprintf(&buf, "%s:%d: %s\n", rel, m.Line, m.Name)
+				continue
+			}
+			ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
+			if ext == "" {
+				ext = "go"
+			}
+			fmt.Fprintf(&buf, "%s:%d-%d: **%s**\n", rel, m.Line, m.EndLine, m.Name)
+			if a.Body {
+				body := m.Body
+				if a.Summary {
+					sl := a.SummaryLines
+					if sl <= 0 {
+						sl = 5
+					}
+					body = grepfunc.SummarizeBody(body, sl)
+				}
+				fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
+			} else {
+				sigLine := firstSigLine(m.Body)
+				if sigLine != "" {
+					fmt.Fprintf(&buf, "```%s\n%s\n```", ext, sigLine)
+				}
+			}
+			if compact {
+				buf.WriteByte('\n')
+			} else {
+				buf.WriteString("\n\n")
+			}
+		}
+		return buf.String()
 	}
 
-	if !a.NamesOnly {
-		if compact {
-			fmt.Fprintf(&buf, "%d symbols %q:\n", len(results), a.Name)
-		} else {
-			fmt.Fprintf(&buf, "%d symbol(s) matching %q:\n\n", len(results), a.Name)
+	output := buildOutput(a.NamesOnly)
+	if a.TokenBudget > 0 && len(output) > a.TokenBudget && !a.NamesOnly {
+		output = buildOutput(true)
+		if len(output) > a.TokenBudget {
+			output = output[:a.TokenBudget]
 		}
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
 	}
-	for _, m := range results {
-		rel := server.RelPath(m.File)
-		if a.NamesOnly {
-			fmt.Fprintf(&buf, "%s:%d: %s\n", rel, m.Line, m.Name)
-			continue
-		}
-		ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
-		if ext == "" {
-			ext = "go"
-		}
-		fmt.Fprintf(&buf, "%s:%d-%d: **%s**\n", rel, m.Line, m.EndLine, m.Name)
-		if a.Body {
-			body := m.Body
-			if a.Summary {
-				sl := a.SummaryLines
-				if sl <= 0 {
-					sl = 5
-				}
-				body = grepfunc.SummarizeBody(body, sl)
-			}
-			fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
-		} else {
-			sigLine := firstSigLine(m.Body)
-			if sigLine != "" {
-				fmt.Fprintf(&buf, "```%s\n%s\n```", ext, sigLine)
-			}
-		}
-		if compact {
-			buf.WriteByte('\n')
-		} else {
-			buf.WriteString("\n\n")
-		}
-	}
+
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
+		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 	}, nil
 }
 

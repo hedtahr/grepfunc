@@ -29,6 +29,7 @@ WARNING: Never store file paths, line numbers, function signatures, or code loca
 			"prefix":    {Type: "string", Description: "When recalling (no key/value), filter returned facts to keys starting with this prefix. E.g. 'decisions' returns only 'decisions.*' keys."},
 			"keys_only": {Type: "boolean", Description: "If true, return only key names (no values). Useful for browsing what's stored before deciding what to recall."},
 			"search":    {Type: "string", Description: "Substring to search across all memory keys AND values. Case-insensitive. Returns matching entries. Useful when you remember a fact but forgot the key."},
+			"merge":     {Type: "boolean", Description: "If true and key exists, append value to existing value instead of overwriting. Deduplicates entries."},
 		},
 		Required: []string{},
 	},
@@ -66,6 +67,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		Prefix    string `json:"prefix"`
 		KeysOnly  bool   `json:"keys_only"`
 		Search    string `json:"search"`
+		Merge     bool   `json:"merge"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
@@ -99,7 +101,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	// Save
 	if a.Key != "" && a.Value != "" {
-		s = upsert(s, a.Key, a.Value)
+		if a.Merge {
+			s = mergeEntry(s, a.Key, a.Value)
+		} else {
+			s = upsert(s, a.Key, a.Value)
+		}
 		if err := save(fp, s); err != nil {
 			return nil, err
 		}
@@ -233,6 +239,34 @@ func upsert(s store, key, value string) store {
 		s.Entries = s.Entries[:maxEntries]
 	}
 	return s
+}
+
+func mergeEntry(s store, key, value string) store {
+	// Find existing entry
+	for _, e := range s.Entries {
+		if e.Key == key {
+			existing := e.Value
+			// Split existing by ", " or newlines
+			parts := strings.Split(existing, ", ")
+			if len(parts) == 1 {
+				parts = strings.Split(existing, "\n")
+			}
+			// Check if new value already present (case-insensitive substring)
+			newLower := strings.ToLower(strings.TrimSpace(value))
+			for _, p := range parts {
+				if strings.Contains(strings.ToLower(strings.TrimSpace(p)), newLower) || strings.Contains(newLower, strings.ToLower(strings.TrimSpace(p))) {
+					return s // already present, no change
+				}
+			}
+			// Append with ", " separator
+			newValue := existing + ", " + value
+			s = removeKey(s, key)
+			s.Entries = append([]entry{{Key: key, Value: newValue, At: time.Now().UTC().Format(time.RFC3339)}}, s.Entries...)
+			return s
+		}
+	}
+	// Key doesn't exist, just upsert
+	return upsert(s, key, value)
 }
 
 func removeKey(s store, key string) store {

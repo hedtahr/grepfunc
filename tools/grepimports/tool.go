@@ -19,12 +19,13 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"module":  {Type: "string", Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any import path containing 'grepfunc'. Omit when using 'file' to list all imports."},
-			"path":    {Type: "string", Description: "Directory to search. Defaults to project root."},
-			"include": {Type: "string", Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted."},
-			"file":    {Type: "string", Description: "If set, list ALL imports in this specific file (ignores module/path)."},
-			"compact": {Type: "boolean", Description: "Terse output. Default false."},
-			"body":    {Type: "boolean", Description: "If true, show matched import lines inline (code block per file). Saves a follow-up grep_context call."},
+			"module":     {Type: "string", Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any import path containing 'grepfunc'. Omit when using 'file' to list all imports."},
+			"path":       {Type: "string", Description: "Directory to search. Defaults to project root."},
+			"include":    {Type: "string", Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted."},
+			"file":       {Type: "string", Description: "If set, list ALL imports in this specific file (ignores module/path)."},
+			"compact":    {Type: "boolean", Description: "Terse output. Default false."},
+			"body":       {Type: "boolean", Description: "If true, show matched import lines inline (code block per file). Saves a follow-up grep_context call."},
+			"names_only": {Type: "boolean", Description: "If true, return only file:import_path — no code blocks. Cheapest mode."},
 		},
 		Required: []string{},
 	},
@@ -62,12 +63,13 @@ var (
 
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	var a struct {
-		Module  string `json:"module"`
-		Path    string `json:"path"`
-		Include string `json:"include"`
-		File    string `json:"file"`
-		Compact bool   `json:"compact"`
-		Body    bool   `json:"body"`
+		Module    string `json:"module"`
+		Path      string `json:"path"`
+		Include   string `json:"include"`
+		File      string `json:"file"`
+		Compact   bool   `json:"compact"`
+		Body      bool   `json:"body"`
+		NamesOnly bool   `json:"names_only"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
@@ -88,6 +90,14 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 		ext := strings.ToLower(filepath.Ext(a.File))
 		entries := parseImports(data, ext, "")
+		if a.NamesOnly {
+			var buf strings.Builder
+			rel := server.RelPath(a.File)
+			for _, e := range entries {
+				fmt.Fprintf(&buf, "%s:%s\n", rel, e.path)
+			}
+			return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
+		}
 		return renderFileImports(server.RelPath(a.File), entries, a.Compact), nil
 	}
 
@@ -143,6 +153,16 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil
 	})
 
+	if a.NamesOnly {
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "%d file(s) importing %q:\n", len(results), a.Module)
+		for _, f := range results {
+			for _, e := range f.imports {
+				fmt.Fprintf(&buf, "%s:%s\n", f.relPath, e.path)
+			}
+		}
+		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
+	}
 	return renderSearchResults(a.Module, results, a.Compact, a.Body), nil
 }
 

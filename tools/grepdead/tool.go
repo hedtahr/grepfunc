@@ -135,69 +135,83 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	checked := len(nameToDecl)
 
 	if checked > 0 {
-		parts := make([]string, 0, len(nameToDecl))
-		for name := range nameToDecl {
-			parts = append(parts, regexp.QuoteMeta(name))
-		}
-		sort.Strings(parts)
-		combinedRe := regexp.MustCompile(`(?i)\b(` + strings.Join(parts, "|") + `)\b`)
 		declRe := regexp.MustCompile(`(?i)(?:(?:func|type|var|const|let|class|def|struct|interface|enum)\s+|func\s+\([^)]+\)\s+)\w+\b`)
 
-		_ = filepath.WalkDir(a.Path, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
+		// Chunk names into batches of 30 to avoid giant regex
+		names := make([]string, 0, len(nameToDecl))
+		for name := range nameToDecl {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		chunkSize := 30
+		for i := 0; i < len(names); i += chunkSize {
+			end := i + chunkSize
+			if end > len(names) {
+				end = len(names)
 			}
-			if d.IsDir() {
-				base := d.Name()
-				if base == ".git" || base == "node_modules" || base == "vendor" ||
-					base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
-					return filepath.SkipDir
+			chunk := names[i:end]
+			parts := make([]string, len(chunk))
+			for j, name := range chunk {
+				parts[j] = regexp.QuoteMeta(name)
+			}
+			chunkRe := regexp.MustCompile(`(?i)\b(` + strings.Join(parts, "|") + `)\b`)
+
+			_ = filepath.WalkDir(a.Path, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
-				return nil
-			}
-			if !d.Type().IsRegular() {
-				return nil
-			}
-			rel, _ := filepath.Rel(a.Path, path)
-			if !grepfunc.MatchGlob(include, rel) {
-				return nil
-			}
-			info, err := d.Info()
-			if err != nil || info.Size() > 2*1024*1024 {
-				return nil
-			}
-			ext := strings.ToLower(filepath.Ext(path))
-			if grepfunc.IsBinaryExt(ext) {
-				return nil
-			}
-			if include == "*" && grepfunc.IsNonSourceExt(ext) {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			for line := range strings.SplitSeq(string(data), "\n") {
-				if !combinedRe.MatchString(line) {
-					continue
+				if d.IsDir() {
+					base := d.Name()
+					if base == ".git" || base == "node_modules" || base == "vendor" ||
+						base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
+						return filepath.SkipDir
+					}
+					return nil
 				}
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") ||
-					strings.HasPrefix(trimmed, "*") {
-					continue
+				if !d.Type().IsRegular() {
+					return nil
 				}
-				if declRe.MatchString(line) {
-					continue
+				rel, _ := filepath.Rel(a.Path, path)
+				if !grepfunc.MatchGlob(include, rel) {
+					return nil
 				}
-				for _, m := range combinedRe.FindAllStringSubmatch(line, -1) {
-					name := m[1]
-					if declFile, ok := nameToDecl[name]; ok && path != declFile {
-						refCount[name]++
+				info, err := d.Info()
+				if err != nil || info.Size() > 2*1024*1024 {
+					return nil
+				}
+				ext := strings.ToLower(filepath.Ext(path))
+				if grepfunc.IsBinaryExt(ext) {
+					return nil
+				}
+				if include == "*" && grepfunc.IsNonSourceExt(ext) {
+					return nil
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return nil
+				}
+				for line := range strings.SplitSeq(string(data), "\n") {
+					if !chunkRe.MatchString(line) {
+						continue
+					}
+					trimmed := strings.TrimSpace(line)
+					if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") ||
+						strings.HasPrefix(trimmed, "*") {
+						continue
+					}
+					if declRe.MatchString(line) {
+						continue
+					}
+					for _, m := range chunkRe.FindAllStringSubmatch(line, -1) {
+						name := m[1]
+						if declFile, ok := nameToDecl[name]; ok && path != declFile {
+							refCount[name]++
+						}
 					}
 				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 
 		for name, count := range refCount {
 			if count == 0 {
@@ -242,5 +256,3 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil
 }
-
-

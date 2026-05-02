@@ -16,34 +16,36 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"pattern":        {Type: "string", Description: "Regex pattern to match against type names or body contents. Matches anywhere inside the definition. Examples: 'User', 'Handler', 'interface', 'class.*Service'."},
-			"path":           {Type: "string", Description: "File or directory to search. Relative to project root or absolute. Defaults to project root."},
-			"include":        {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.java'. If omitted, auto-filtered to common source extensions."},
-			"max_results":    {Type: "integer", Description: "Max definitions to return. Default 15, max 50."},
-			"offset":         {Type: "integer", Description: "Starting position for paginated results (0-based)."},
-			"body":           {Type: "boolean", Description: "Include full body in output. Default: false (name + location only)."},
-			"case_sensitive": {Type: "boolean", Description: "Case-sensitive regex. Default: false (case-insensitive)."},
-			"summary":        {Type: "boolean", Description: "If true and body=true, truncate large definitions: shows first+last N lines with omission count. Reduces token cost for large definitions."},
-			"summary_lines":  {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
-			"names_only":     {Type: "boolean", Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans."},
-			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
+			"pattern":         {Type: "string", Description: "Regex pattern to match against type names or body contents. Matches anywhere inside the definition. Examples: 'User', 'Handler', 'interface', 'class.*Service'."},
+			"path":            {Type: "string", Description: "File or directory to search. Relative to project root or absolute. Defaults to project root."},
+			"include":         {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.java'. If omitted, auto-filtered to common source extensions."},
+			"max_results":     {Type: "integer", Description: "Max definitions to return. Default 15, max 50."},
+			"offset":          {Type: "integer", Description: "Starting position for paginated results (0-based)."},
+			"body":            {Type: "boolean", Description: "Include full body in output. Default: false (name + location only)."},
+			"case_sensitive":  {Type: "boolean", Description: "Case-sensitive regex. Default: false (case-insensitive)."},
+			"summary":         {Type: "boolean", Description: "If true and body=true, truncate large definitions: shows first+last N lines with omission count. Reduces token cost for large definitions."},
+			"summary_lines":   {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
+			"names_only":      {Type: "boolean", Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans."},
+			"compact":         {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
+			"exclude_pattern": {Type: "string", Description: "Regex to exclude matching results. Filters on body and name."},
 		},
 		Required: []string{"pattern"},
 	},
 }
 
 type args struct {
-	Pattern       string `json:"pattern"`
-	Path          string `json:"path"`
-	Include       string `json:"include"`
-	MaxResults    int    `json:"max_results"`
-	Offset        int    `json:"offset"`
-	Body          bool   `json:"body"`
-	CaseSensitive bool   `json:"case_sensitive"`
-	Summary       bool   `json:"summary"`
-	SummaryLines  int    `json:"summary_lines"`
-	NamesOnly     bool   `json:"names_only"`
-	Compact       bool   `json:"compact"`
+	Pattern        string `json:"pattern"`
+	Path           string `json:"path"`
+	Include        string `json:"include"`
+	MaxResults     int    `json:"max_results"`
+	Offset         int    `json:"offset"`
+	Body           bool   `json:"body"`
+	CaseSensitive  bool   `json:"case_sensitive"`
+	Summary        bool   `json:"summary"`
+	SummaryLines   int    `json:"summary_lines"`
+	NamesOnly      bool   `json:"names_only"`
+	Compact        bool   `json:"compact"`
+	ExcludePattern string `json:"exclude_pattern"`
 }
 
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
@@ -80,6 +82,13 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	results, err := grepfunc.Search(a.Path, a.Include, pattern, fetchMax, grepfunc.IsStructSig)
 	if err != nil {
 		return nil, err
+	}
+
+	if a.ExcludePattern != "" {
+		results, err = filterByExclude(results, a.ExcludePattern)
+		if err != nil {
+			return nil, fmt.Errorf("exclude_pattern: %v", err)
+		}
 	}
 
 	total := len(results)
@@ -156,4 +165,19 @@ func firstLine(s string, includeBody bool) string {
 		return s[:120] + "..."
 	}
 	return s
+}
+
+func filterByExclude(matches []grepfunc.FuncMatch, excludePattern string) ([]grepfunc.FuncMatch, error) {
+	re, err := grepfunc.CompilePattern(excludePattern, false)
+	if err != nil {
+		return nil, err
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		if re.MatchString(m.Body) || re.MatchString(m.Name) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }

@@ -121,6 +121,16 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	if len(matches) == 0 {
+		// Check session cache as last resort
+		cacheKey := "symbol:" + a.Path + ":" + a.Name
+		if cached, ok := server.CacheGet(cacheKey); ok {
+			if cm, ok := cached.(grepfunc.FuncMatch); ok {
+				matches = append(matches, cm)
+			}
+		}
+	}
+
+	if len(matches) == 0 {
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{
 				Type: "text",

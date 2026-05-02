@@ -30,6 +30,7 @@ var Tool = server.Tool{
 			"receiver":       {Type: "string", Description: "Filter call sites to method calls on this receiver/variable name. E.g. 'receiver: \"s\"' finds 's.MethodName('. Useful to narrow results for common method names."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode (~20x fewer tokens). For quick scan of where a function is called."},
 			"scope":          {Type: "boolean", Description: "Annotate each call site with the enclosing function/method name. Default false."},
+			"token_budget":  {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only. No default (unlimited)."},
 		},
 		Required: []string{"name"},
 	},
@@ -47,6 +48,7 @@ type args struct {
 	Receiver      string `json:"receiver"`
 	NamesOnly     bool   `json:"names_only"`
 	Scope         bool   `json:"scope"`
+	TokenBudget   int    `json:"token_budget"`
 }
 
 type callSite struct {
@@ -218,78 +220,91 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}, nil
 	}
 
-	shown := len(sites)
+	buildOutput := func(namesOnly bool) string {
+		var out strings.Builder
+		shown := len(sites)
 
-	if !a.NamesOnly {
-		if compact {
-			if scannedAll {
-				fmt.Fprintf(&buf, "%d callers %q\n", total, a.Name)
+		if !namesOnly {
+			if compact {
+				if scannedAll {
+					fmt.Fprintf(&out, "%d callers %q\n", total, a.Name)
+				} else {
+					fmt.Fprintf(&out, "%d+ callers %q (showing %d)\n", total, a.Name, shown)
+				}
 			} else {
-				fmt.Fprintf(&buf, "%d+ callers %q (showing %d)\n", total, a.Name, shown)
-			}
-		} else {
-			if scannedAll {
-				fmt.Fprintf(&buf, "%d call site(s) for %q\n\n", total, a.Name)
-			} else {
-				fmt.Fprintf(&buf, "%d+ call site(s) for %q (showing %d)\n\n", total, a.Name, shown)
+				if scannedAll {
+					fmt.Fprintf(&out, "%d call site(s) for %q\n\n", total, a.Name)
+				} else {
+					fmt.Fprintf(&out, "%d+ call site(s) for %q (showing %d)\n\n", total, a.Name, shown)
+				}
 			}
 		}
-	}
 
-	for _, s := range sites {
-		rel := server.RelPath(s.file)
-		callLineNum := s.callIdx + 1
+		for _, s := range sites {
+			rel := server.RelPath(s.file)
+			callLineNum := s.callIdx + 1
 
-		if a.NamesOnly {
+			if namesOnly {
+				if s.scope != "" {
+					fmt.Fprintf(&out, "%s:%d [%s]\n", rel, callLineNum, s.scope)
+				} else {
+					fmt.Fprintf(&out, "%s:%d\n", rel, callLineNum)
+				}
+				continue
+			}
+
+			ext := strings.TrimPrefix(filepath.Ext(s.file), ".")
+			if ext == "" {
+				ext = "txt"
+			}
+
+			windowStart := s.callIdx - a.ContextLines
+			if windowStart < 0 {
+				windowStart = 0
+			}
+
+			header := fmt.Sprintf("%s:%d", rel, callLineNum)
 			if s.scope != "" {
-				fmt.Fprintf(&buf, "%s:%d [%s]\n", rel, callLineNum, s.scope)
-			} else {
-				fmt.Fprintf(&buf, "%s:%d\n", rel, callLineNum)
+				header += " [in " + s.scope + "]"
 			}
-			continue
-		}
-
-		ext := strings.TrimPrefix(filepath.Ext(s.file), ".")
-		if ext == "" {
-			ext = "txt"
-		}
-
-		windowStart := s.callIdx - a.ContextLines
-		if windowStart < 0 {
-			windowStart = 0
-		}
-
-		header := fmt.Sprintf("%s:%d", rel, callLineNum)
-		if s.scope != "" {
-			header += " [in " + s.scope + "]"
-		}
-		if compact {
-			fmt.Fprintf(&buf, "%s\n", header)
-		} else {
-			fmt.Fprintf(&buf, "%s:\n", header)
-		}
-		fmt.Fprintf(&buf, "```%s\n", ext)
-		for j, line := range s.lines {
-			lineNum := windowStart + j + 1
-			if lineNum == callLineNum {
-				fmt.Fprintf(&buf, "> %d: %s\n", lineNum, line)
+			if compact {
+				fmt.Fprintf(&out, "%s\n", header)
 			} else {
-				fmt.Fprintf(&buf, "  %d: %s\n", lineNum, line)
+				fmt.Fprintf(&out, "%s:\n", header)
+			}
+			fmt.Fprintf(&out, "```%s\n", ext)
+			for j, line := range s.lines {
+				lineNum := windowStart + j + 1
+				if lineNum == callLineNum {
+					fmt.Fprintf(&out, "> %d: %s\n", lineNum, line)
+				} else {
+					fmt.Fprintf(&out, "  %d: %s\n", lineNum, line)
+				}
+			}
+			fmt.Fprintf(&out, "```")
+			if compact {
+				out.WriteByte('\n')
+			} else {
+				out.WriteString("\n\n")
 			}
 		}
-		fmt.Fprintf(&buf, "```")
-		if compact {
-			buf.WriteByte('\n')
-		} else {
-			buf.WriteString("\n\n")
+
+		if !namesOnly && (!scannedAll || a.Offset+shown < total) {
+			fmt.Fprintf(&out, "More results available. Use offset=%d.\n", a.Offset+shown)
 		}
+		return out.String()
 	}
 
-	if !a.NamesOnly && (!scannedAll || a.Offset+shown < total) {
-		fmt.Fprintf(&buf, "More results available. Use offset=%d.\n", a.Offset+shown)
+	output := buildOutput(a.NamesOnly)
+	if a.TokenBudget > 0 && len(output) > a.TokenBudget && !a.NamesOnly {
+		output = buildOutput(true)
+		if len(output) > a.TokenBudget {
+			output = output[:a.TokenBudget]
+		}
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
 	}
 
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
+		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 	}, nil
 }

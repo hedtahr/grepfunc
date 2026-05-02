@@ -16,42 +16,46 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"pattern":        {Type: "string", Description: "Regex pattern to match against function names or code. Matches anywhere inside a function's lines — not just the signature. Examples: 'func.*Handler', 'def process', 'return', 'TODO'."},
-			"path":           {Type: "string", Description: "File or directory to search. Relative to project root or absolute. Defaults to project root."},
-			"include":        {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions."},
-			"max_results":    {Type: "integer", Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases to reduce token usage."},
-			"offset":         {Type: "integer", Description: "Starting position for paginated results (0-based)."},
-			"body":           {Type: "boolean", Description: "Include full function body in output. Default: false (signature + location only)."},
-			"case_sensitive": {Type: "boolean", Description: "Case-sensitive regex. Default: false (case-insensitive)."},
-			"summary":        {Type: "boolean", Description: "If true and body=true, truncate large functions: shows first+last N lines with omission count. Reduces token cost for large handlers."},
-			"summary_lines":  {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
-			"names_only":     {Type: "boolean", Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans."},
-			"include_types":  {Type: "boolean", Description: "If true, also return type definitions (struct/class/interface/enum) in the results. Combines grep_func + grep_struct in one call."},
-			"sig_lines":      {Type: "integer", Description: "Lines of signature to show when body=false. Default 3. Max 5. Useful for multi-line function signatures."},
-			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
-			"receiver":       {Type: "string", Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). Applies to Go, Rust, Python classes."},
-			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of a flat list. Format: '### path/to/file.go (N matches)' then results. Reduces navigation overhead in large multi-file scans."},
+			"pattern":         {Type: "string", Description: "Regex pattern to match against function names or code. Matches anywhere inside a function's lines — not just the signature. Examples: 'func.*Handler', 'def process', 'return', 'TODO'."},
+			"path":            {Type: "string", Description: "File or directory to search. Relative to project root or absolute. Defaults to project root."},
+			"include":         {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions."},
+			"max_results":     {Type: "integer", Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases to reduce token usage."},
+			"offset":          {Type: "integer", Description: "Starting position for paginated results (0-based)."},
+			"body":            {Type: "boolean", Description: "Include full function body in output. Default: false (signature + location only)."},
+			"case_sensitive":  {Type: "boolean", Description: "Case-sensitive regex. Default: false (case-insensitive)."},
+			"summary":         {Type: "boolean", Description: "If true and body=true, truncate large functions: shows first+last N lines with omission count. Reduces token cost for large handlers."},
+			"summary_lines":   {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
+			"names_only":      {Type: "boolean", Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans."},
+			"include_types":   {Type: "boolean", Description: "If true, also return type definitions (struct/class/interface/enum) in the results. Combines grep_func + grep_struct in one call."},
+			"sig_lines":       {Type: "integer", Description: "Lines of signature to show when body=false. Default 3. Max 5. Useful for multi-line function signatures."},
+			"compact":         {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
+			"receiver":        {Type: "string", Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). Applies to Go, Rust, Python classes."},
+			"group_by_file":   {Type: "boolean", Description: "Group results under file headers instead of a flat list. Format: '### path/to/file.go (N matches)' then results. Reduces navigation overhead in large multi-file scans."},
+			"token_budget":    {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only/summary mode. No default (unlimited)."},
+			"exclude_pattern": {Type: "string", Description: "Regex to exclude matching results. Filters on body and name."},
 		},
 		Required: []string{"pattern"},
 	},
 }
 
 type args struct {
-	Pattern       string `json:"pattern"`
-	Path          string `json:"path"`
-	Include       string `json:"include"`
-	MaxResults    int    `json:"max_results"`
-	Offset        int    `json:"offset"`
-	Body          bool   `json:"body"`
-	CaseSensitive bool   `json:"case_sensitive"`
-	Summary       bool   `json:"summary"`
-	SummaryLines  int    `json:"summary_lines"`
-	NamesOnly     bool   `json:"names_only"`
-	IncludeTypes  bool   `json:"include_types"`
-	SigLines      int    `json:"sig_lines"`
-	Compact       bool   `json:"compact"`
-	Receiver      string `json:"receiver"`
-	GroupByFile   bool   `json:"group_by_file"`
+	Pattern        string `json:"pattern"`
+	Path           string `json:"path"`
+	Include        string `json:"include"`
+	MaxResults     int    `json:"max_results"`
+	Offset         int    `json:"offset"`
+	Body           bool   `json:"body"`
+	CaseSensitive  bool   `json:"case_sensitive"`
+	Summary        bool   `json:"summary"`
+	SummaryLines   int    `json:"summary_lines"`
+	NamesOnly      bool   `json:"names_only"`
+	IncludeTypes   bool   `json:"include_types"`
+	SigLines       int    `json:"sig_lines"`
+	Compact        bool   `json:"compact"`
+	Receiver       string `json:"receiver"`
+	GroupByFile    bool   `json:"group_by_file"`
+	TokenBudget    int    `json:"token_budget"`
+	ExcludePattern string `json:"exclude_pattern"`
 }
 
 type FuncMatch struct {
@@ -126,79 +130,134 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		all = filterByReceiver(all, a.Receiver)
 	}
 
+	// Exclude pattern filter
+	if a.ExcludePattern != "" {
+		all, err = filterByExclude(all, a.ExcludePattern)
+		if err != nil {
+			return nil, fmt.Errorf("exclude_pattern: %v", err)
+		}
+	}
+
 	total := len(all)
 	start := min(a.Offset, total)
 	end := min(start+a.MaxResults, total)
 	page := all[start:end]
 
-	var buf strings.Builder
-	namesOnly := a.NamesOnly
-	includeBody := !namesOnly && a.Body
-	compact := a.Compact
-	label := "match"
-	if !a.IncludeTypes {
-		label = "function"
-	}
-	if compact {
-		fmt.Fprintf(&buf, "%d %ss %q", total, label, a.Pattern)
-	} else {
-		fmt.Fprintf(&buf, "%d %s(es) matching %q", total, label, a.Pattern)
-	}
-	if total > a.MaxResults || a.Offset > 0 {
-		fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
-	}
-	if compact {
-		buf.WriteString("\n")
-	} else {
-		buf.WriteString("\n\n")
-	}
-	type fileGroup struct {
-		file    string
-		matches []FuncMatch
-	}
-	groupResults := func(ms []FuncMatch) []fileGroup {
-		seen := map[string]int{}
-		var groups []fileGroup
-		for _, m := range ms {
-			rel := server.RelPath(m.File)
-			if idx, ok := seen[rel]; ok {
-				groups[idx].matches = append(groups[idx].matches, m)
-			} else {
-				seen[rel] = len(groups)
-				groups = append(groups, fileGroup{file: rel, matches: []FuncMatch{m}})
-			}
+	// Defer token_budget check: build full, then rebuild terse if needed
+	buildOutput := func(namesOnly bool) string {
+		var buf strings.Builder
+		includeBody := !namesOnly && a.Body
+		compact := a.Compact
+		label := "match"
+		if !a.IncludeTypes {
+			label = "function"
 		}
-		return groups
-	}
-
-	if a.GroupByFile {
-		for _, g := range groupResults(page) {
-			if compact {
-				fmt.Fprintf(&buf, "### %s (%d)\n", g.file, len(g.matches))
-			} else {
-				fmt.Fprintf(&buf, "\n### %s — %d match(es)\n\n", g.file, len(g.matches))
+		if compact {
+			fmt.Fprintf(&buf, "%d %ss %q", total, label, a.Pattern)
+		} else {
+			fmt.Fprintf(&buf, "%d %s(es) matching %q", total, label, a.Pattern)
+		}
+		if total > a.MaxResults || a.Offset > 0 {
+			fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
+		}
+		if compact {
+			buf.WriteString("\n")
+		} else {
+			buf.WriteString("\n\n")
+		}
+		type fileGroup struct {
+			file    string
+			matches []FuncMatch
+		}
+		groupResults := func(ms []FuncMatch) []fileGroup {
+			seen := map[string]int{}
+			var groups []fileGroup
+			for _, m := range ms {
+				rel := server.RelPath(m.File)
+				if idx, ok := seen[rel]; ok {
+					groups[idx].matches = append(groups[idx].matches, m)
+				} else {
+					seen[rel] = len(groups)
+					groups = append(groups, fileGroup{file: rel, matches: []FuncMatch{m}})
+				}
 			}
-			for _, m := range g.matches {
+			return groups
+		}
+
+		if a.GroupByFile {
+			for _, g := range groupResults(page) {
+				if compact {
+					fmt.Fprintf(&buf, "### %s (%d)\n", g.file, len(g.matches))
+				} else {
+					fmt.Fprintf(&buf, "\n### %s — %d match(es)\n\n", g.file, len(g.matches))
+				}
+				for _, m := range g.matches {
+					if namesOnly {
+						nm := m.Name
+						if a.IncludeTypes && m.Kind != "" {
+							nm = "[" + m.Kind + "] " + nm
+						}
+						if compact {
+							fmt.Fprintf(&buf, "L%d: %s\n", m.Line, nm)
+						} else {
+							fmt.Fprintf(&buf, "L%d: %s (%dL)\n", m.Line, nm, m.Lines)
+						}
+						continue
+					}
+					if includeBody {
+						fmt.Fprintf(&buf, "L%d-%d: %s\n", m.Line, m.EndLine, firstLine(m.Body, true))
+					} else {
+						sig := sigPreview(m.Body, a.SigLines)
+						if a.IncludeTypes && m.Kind != "" {
+							sig = "[" + m.Kind + "] " + sig
+						}
+						fmt.Fprintf(&buf, "L%d-%d: %s\n", m.Line, m.EndLine, sig)
+					}
+					if includeBody {
+						ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
+						if ext == "" {
+							ext = "go"
+						}
+						body := m.Body
+						if a.Summary {
+							sl := a.SummaryLines
+							if sl <= 0 {
+								sl = 5
+							}
+							body = SummarizeBody(body, sl)
+						}
+						fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
+						if compact {
+							buf.WriteString("\n")
+						} else {
+							buf.WriteString("\n\n")
+						}
+					}
+				}
+			}
+		} else {
+			for _, m := range page {
+				rel := server.RelPath(m.File)
 				if namesOnly {
 					nm := m.Name
 					if a.IncludeTypes && m.Kind != "" {
 						nm = "[" + m.Kind + "] " + nm
 					}
 					if compact {
-						fmt.Fprintf(&buf, "L%d: %s\n", m.Line, nm)
+						fmt.Fprintf(&buf, "%s:%d: %s\n", rel, m.Line, nm)
 					} else {
-						fmt.Fprintf(&buf, "L%d: %s (%dL)\n", m.Line, nm, m.Lines)
+						fmt.Fprintf(&buf, "%s:%d: %s (%dL)\n", rel, m.Line, nm, m.Lines)
 					}
 					continue
 				}
 				if includeBody {
-					fmt.Fprintf(&buf, "L%d-%d: %s\n", m.Line, m.EndLine, firstLine(m.Body, true))
+					fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, true))
 				} else {
 					sig := sigPreview(m.Body, a.SigLines)
 					if a.IncludeTypes && m.Kind != "" {
 						sig = "[" + m.Kind + "] " + sig
 					}
-					fmt.Fprintf(&buf, "L%d-%d: %s\n", m.Line, m.EndLine, sig)
+					fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, sig)
 				}
 				if includeBody {
 					ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
@@ -221,58 +280,24 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 					}
 				}
 			}
+		} // end group_by_file else
+		if end < total {
+			fmt.Fprintf(&buf, "\n%d more results. Use offset=%d for next page.", total-end, end)
 		}
-	} else {
-		for _, m := range page {
-			rel := server.RelPath(m.File)
-			if namesOnly {
-				nm := m.Name
-				if a.IncludeTypes && m.Kind != "" {
-					nm = "[" + m.Kind + "] " + nm
-				}
-				if compact {
-					fmt.Fprintf(&buf, "%s:%d: %s\n", rel, m.Line, nm)
-				} else {
-					fmt.Fprintf(&buf, "%s:%d: %s (%dL)\n", rel, m.Line, nm, m.Lines)
-				}
-				continue
-			}
-			if includeBody {
-				fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, true))
-			} else {
-				sig := sigPreview(m.Body, a.SigLines)
-				if a.IncludeTypes && m.Kind != "" {
-					sig = "[" + m.Kind + "] " + sig
-				}
-				fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, sig)
-			}
-			if includeBody {
-				ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
-				if ext == "" {
-					ext = "go"
-				}
-				body := m.Body
-				if a.Summary {
-					sl := a.SummaryLines
-					if sl <= 0 {
-						sl = 5
-					}
-					body = SummarizeBody(body, sl)
-				}
-				fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
-				if compact {
-					buf.WriteString("\n")
-				} else {
-					buf.WriteString("\n\n")
-				}
-			}
-		}
-	} // end group_by_file else
-	if end < total {
-		fmt.Fprintf(&buf, "\n%d more results. Use offset=%d for next page.", total-end, end)
+		return buf.String()
 	}
+
+	output := buildOutput(a.NamesOnly)
+	if a.TokenBudget > 0 && len(output) > a.TokenBudget && !a.NamesOnly {
+		output = buildOutput(true)
+		if len(output) > a.TokenBudget {
+			output = output[:a.TokenBudget]
+		}
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
+	}
+
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
+		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 	}, nil
 }
 
@@ -287,6 +312,21 @@ func filterByReceiver(matches []FuncMatch, name string) []FuncMatch {
 		}
 	}
 	return out
+}
+
+func filterByExclude(matches []FuncMatch, excludePattern string) ([]FuncMatch, error) {
+	re, err := CompilePattern(excludePattern, false)
+	if err != nil {
+		return nil, err
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		if re.MatchString(m.Body) || re.MatchString(m.Name) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 func sigPreview(body string, n int) string {

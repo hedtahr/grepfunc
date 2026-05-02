@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"mcp_patch_file/server"
+	"mcp_patch_file/tools/grepfunc"
 )
 
 var Tool = server.Tool{
@@ -17,8 +20,9 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":    {Type: "string", Description: "Path to the source file. Relative to project root or absolute. Defaults to last file from file_head/patch_file/find_related in this session."},
-			"compact": {Type: "boolean", Description: "Terse output: less whitespace, no category labels. Default false."},
+			"path":         {Type: "string", Description: "Path to the source file. Relative to project root or absolute. Defaults to last file from file_head/patch_file/find_related in this session."},
+			"compact":      {Type: "boolean", Description: "Terse output: less whitespace, no category labels. Default false."},
+			"with_symbols": {Type: "boolean", Description: "If true, include top-level function and type names found in each related file. Saves the find_related → file_symbols two-step."},
 		},
 		Required: []string{},
 	},
@@ -26,8 +30,9 @@ var Tool = server.Tool{
 
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	var a struct {
-		Path    string `json:"path"`
-		Compact bool   `json:"compact"`
+		Path        string `json:"path"`
+		Compact     bool   `json:"compact"`
+		WithSymbols bool   `json:"with_symbols"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
@@ -53,11 +58,16 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			fmt.Fprintf(&buf, "%d file(s) related to %s:\n\n", len(related), a.Path)
 		}
 		for _, r := range related {
+			relPath := server.RelPath(r)
 			if compact {
-				fmt.Fprintf(&buf, "- `%s`\n", server.RelPath(r))
+				fmt.Fprintf(&buf, "- `%s`\n", relPath)
 			} else {
 				category := categorize(r, a.Path)
-				fmt.Fprintf(&buf, "- %s → `%s`\n", category, server.RelPath(r))
+				symStr := ""
+				if a.WithSymbols {
+					symStr = extractSymbols(r)
+				}
+				fmt.Fprintf(&buf, "- %s → `%s`%s\n", category, relPath, symStr)
 			}
 		}
 	}
@@ -127,6 +137,10 @@ func findRelated(filePath string) []string {
 	if filepath.Dir(projectRoot) == projectRoot {
 		projectRoot = dir
 	}
+	// Cap depth: if projectRoot is >4 levels above dir, fall back to dir
+	if depthBetween(projectRoot, dir) > 4 {
+		projectRoot = dir
+	}
 
 	filepath.WalkDir(projectRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -136,6 +150,10 @@ func findRelated(filePath string) []string {
 			base := d.Name()
 			if base == ".git" || base == "node_modules" || base == "vendor" ||
 				base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+			// Skip dirs >4 levels deep from projectRoot
+			if depthBetween(projectRoot, p) > 4 {
 				return filepath.SkipDir
 			}
 			return nil
@@ -272,4 +290,45 @@ func toCamel(s string) string {
 		}
 	}
 	return buf.String()
+}
+func depthBetween(root, child string) int {
+	rel, err := filepath.Rel(root, child)
+	if err != nil {
+		return 0
+	}
+	if rel == "." {
+		return 0
+	}
+	return len(strings.Split(rel, string(filepath.Separator)))
+}
+var matchAll = regexp.MustCompile(`\w`)
+
+func extractSymbols(filePath string) string {
+	fi, err := os.Stat(filePath)
+	if err != nil || fi.Size() > 100_000 {
+		return ""
+	}
+	funcs, _ := grepfunc.Search(filePath, "*", matchAll, 5, grepfunc.IsFuncSig)
+	types, _ := grepfunc.Search(filePath, "*", matchAll, 5, grepfunc.IsStructSig)
+	var names []string
+	seen := map[string]bool{}
+	for _, f := range funcs {
+		if !seen[f.Name] {
+			seen[f.Name] = true
+			names = append(names, f.Name)
+		}
+	}
+	for _, t := range types {
+		if !seen[t.Name] {
+			seen[t.Name] = true
+			names = append(names, t.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) > 5 {
+		names = names[:5]
+	}
+	return " (" + strings.Join(names, ", ") + ")"
 }
