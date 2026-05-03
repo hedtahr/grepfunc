@@ -15,7 +15,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":      {Type: "string", Description: "Project directory. Defaults to project root."},
+			"path":      {Type: "string", Description: "MUST be absolute path to project directory."},
 			"commits":   {Type: "integer", Description: "Number of recent commits to show. Default 5."},
 			"diff_stat": {Type: "boolean", Description: "Include git diff --stat (unstaged changes). Default true."},
 			"compact":   {Type: "boolean", Description: "Terse output. Default false."},

@@ -94,6 +94,17 @@ func (s *Server) handle(req Request) *Response {
 		if err := json.Unmarshal(req.Params, &initParams); err != nil {
 			fmt.Fprintf(os.Stderr, "[mcp] json.Unmarshal initialize: %v\n", err)
 		}
+		fmt.Fprintf(os.Stderr, "[mcp] initialize: rootPath=%q rootUri=%q roots=%d\n",
+			initParams.RootPath, initParams.RootURI, len(initParams.Roots))
+		// Write full params to tmp log for debugging
+		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			fmt.Fprintf(f, "raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d\n",
+				string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
+			for i, r := range initParams.Roots {
+				fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
+			}
+			f.Close()
+		}
 		root := initParams.RootPath
 		if root == "" {
 			root = initParams.RootURI
@@ -103,7 +114,14 @@ func (s *Server) handle(req Request) *Response {
 		}
 		root = strings.TrimPrefix(root, "file://")
 		if root == "" {
-			root, _ = os.Getwd()
+			if r := os.Getenv("PROJECT_ROOT"); r != "" {
+				root = r
+			} else {
+				root = detectZedWorkspace()
+				if root == "" {
+					root, _ = os.Getwd()
+				}
+			}
 		}
 		// normalize away symlinks (macOS /Users → /private/Users)
 		if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -143,6 +161,21 @@ func (s *Server) handle(req Request) *Response {
 		if len(args) == 0 {
 			args = params.Args
 		}
+		// Allow per-call cwd override (Zed may not send rootPath in initialize)
+		var cwdExtract struct {
+			CWD string `json:"cwd"`
+		}
+		json.Unmarshal(args, &cwdExtract)
+		if cwdExtract.CWD != "" {
+			if resolved, err := filepath.EvalSymlinks(cwdExtract.CWD); err == nil {
+				cwdExtract.CWD = resolved
+			}
+			if info, err := os.Stat(cwdExtract.CWD); err == nil && info.IsDir() {
+				ProjectRoot = cwdExtract.CWD
+				s.projectRoot = cwdExtract.CWD
+			}
+		}
+
 		for _, te := range s.tools {
 			if te.Tool.Name == params.Name {
 				result, err := te.Handler(args)
@@ -189,6 +222,13 @@ func ResolvePath(p string) string {
 		return ProjectRoot
 	}
 	if filepath.IsAbs(p) {
+		// Re-orient whenever path is outside current ProjectRoot (handles project switch).
+		cleanRoot := filepath.Clean(ProjectRoot)
+		if !strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
+			if root := FindProjectRoot(filepath.Dir(p)); root != "/" {
+				ProjectRoot = root
+			}
+		}
 		return p
 	}
 	// Strip project-root basename prefix if present.
@@ -343,4 +383,28 @@ func autoDiscover(root string) {
 	os.MkdirAll(filepath.Dir(memPath), 0755)
 	out, _ := json.MarshalIndent(s, "", "  ")
 	os.WriteFile(memPath, out, 0644)
+}
+
+// detectZedWorkspace queries Zed's SQLite DB for the most recently active workspace.
+func detectZedWorkspace() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dbPath := filepath.Join(home, "Library", "Application Support", "Zed", "db", "0-stable", "db.sqlite")
+	if _, err := os.Stat(dbPath); err != nil {
+		return ""
+	}
+	out, err := exec.Command("sqlite3", dbPath,
+		"SELECT paths FROM workspaces ORDER BY timestamp DESC LIMIT 1;",
+	).Output()
+	if err != nil {
+		return ""
+	}
+	// paths may be pipe-separated for multi-root workspaces; take first
+	path := strings.TrimSpace(strings.SplitN(string(out), "|", 2)[0])
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return path
+	}
+	return ""
 }

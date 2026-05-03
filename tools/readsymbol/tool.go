@@ -17,7 +17,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":           {Type: "string", Description: "File to read the symbol from. Relative to project root or absolute. Defaults to the last file operated on in this session."},
+			"path":           {Type: "string", Description: "MUST be absolute path to the file to read the symbol from. Defaults to last file operated on in this session."},
 			"name":           {Type: "string", Description: "Symbol name to find and read. Matches function/method/type names. Case-insensitive."},
 			"kind":           {Type: "string", Description: "Filter by kind: 'func' (functions/methods only), 'type' (structs/interfaces/enums only), or 'any' (default)."},
 			"case_sensitive": {Type: "boolean", Description: "Case-sensitive matching. Default: false."},

@@ -24,10 +24,6 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 	args.Path = server.ResolvePath(args.Path)
 	server.SetLastPath(args.Path)
 
-	if args.Undo {
-		return handleUndo(args.Path)
-	}
-
 	// insert_file: read file and treat as insert op
 	if args.InsertFile != "" {
 		insertPath := server.ResolvePath(args.InsertFile)
@@ -187,42 +183,6 @@ func computeResults(content []byte, inserts []InsertOp, edits []EditOp) []editRe
 	})
 
 	return results
-}
-
-var backupDir = ".patch_backup"
-
-func backupPath(path string) string {
-	rel := server.RelPath(path)
-	encoded := strings.ReplaceAll(rel, "/", "_")
-	return filepath.Join(server.ProjectRoot, backupDir, encoded+".bak")
-}
-
-func handleUndo(path string) (*server.ToolCallResult, error) {
-	bp := backupPath(path)
-	// Try most recent first, then older backups
-	for _, suffix := range []string{"", ".1", ".2"} {
-		data, err := os.ReadFile(bp + suffix)
-		if err != nil {
-			continue
-		}
-		// Shift remaining backups down
-		switch suffix {
-		case ".1":
-			os.Rename(bp+".2", bp+".1")
-		case ".2":
-			os.Rename(bp+".2", bp+".1")
-			os.Rename(bp+".3", bp+".2")
-		}
-		if err := os.WriteFile(path, data, 0644); err != nil {
-			return nil, fmt.Errorf("undo failed: %v", err)
-		}
-		// Remove the used backup
-		os.Remove(bp + suffix)
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("Undo: restored %s from backup (%s).", server.RelPath(path), suffix)}},
-		}, nil
-	}
-	return nil, fmt.Errorf("no backup found for %s", path)
 }
 
 func runValidate(path string) string {
@@ -538,16 +498,7 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
 	}
 
-	bp := backupPath(path)
-	os.MkdirAll(filepath.Dir(bp), 0755)
-
-	// #10: rotate backups (keep 3 levels: .bak, .bak.1, .bak.2)
-	os.Rename(bp+".2", bp+".3")
-	os.Rename(bp+".1", bp+".2")
-	os.Rename(bp, bp+".1")
-	os.WriteFile(bp, original, 0644)
-
-	// #9: atomic write via tmp + rename
+	// atomic write via tmp + rename
 	tmpPath := path + ".tmp"
 	os.Remove(tmpPath)
 	if err := os.WriteFile(tmpPath, current, 0644); err != nil {

@@ -17,7 +17,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":    {Type: "string", Description: "Directory to outline. Defaults to project root."},
+			"path":    {Type: "string", Description: "MUST be absolute path to directory to outline."},
 			"include": {Type: "string", Description: "Glob to filter files. E.g. '**/*.go'. Defaults to all source files."},
 			"filter":  {Type: "string", Description: "Which symbols: 'func', 'type', or 'all' (default)."},
 			"pattern": {Type: "string", Description: "Regex to filter symbol names/signatures. Case-insensitive."},

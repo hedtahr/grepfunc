@@ -19,7 +19,7 @@ var Tool = server.Tool{
 		Properties: map[string]server.Property{
 			"pattern":        {Type: "string", Description: "Regex to search for within the symbol body."},
 			"symbol":         {Type: "string", Description: "Function or type name to scope the search to."},
-			"path":           {Type: "string", Description: "File or directory to search. Defaults to project root."},
+			"path":           {Type: "string", Description: "MUST be absolute path to file or directory to search."},
 			"include":        {Type: "string", Description: "Glob filter e.g. '**/*.go'. Defaults to all source files."},
 			"case_sensitive": {Type: "boolean", Description: "Default false."},
 			"context_lines":  {Type: "integer", Description: "Lines of context around each match. Default 2, max 8."},

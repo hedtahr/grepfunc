@@ -20,9 +20,9 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"module":     {Type: "string", Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any import path containing 'grepfunc'. Omit when using 'file' to list all imports."},
-			"path":       {Type: "string", Description: "Directory to search. Defaults to project root."},
+			"path":       {Type: "string", Description: "MUST be absolute path to directory to search."},
 			"include":    {Type: "string", Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted."},
-			"file":       {Type: "string", Description: "If set, list ALL imports in this specific file (ignores module/path)."},
+			"file":       {Type: "string", Description: "MUST be absolute path to file. If set, list ALL imports in this specific file (ignores module/path)."},
 			"compact":    {Type: "boolean", Description: "Terse output. Default false."},
 			"body":       {Type: "boolean", Description: "If true, show matched import lines inline (code block per file). Saves a follow-up grep_context call."},
 			"names_only": {Type: "boolean", Description: "If true, return only file:import_path — no code blocks. Cheapest mode."},

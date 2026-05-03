@@ -21,7 +21,7 @@ WARNING: Never store file paths, line numbers, function signatures, or code loca
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":      {Type: "string", Description: "Project directory. Defaults to current working directory. Memory is stored per-project at <project>/.llm/memory.json."},
+			"path":      {Type: "string", Description: "MUST be absolute path to project directory (e.g. '/Users/you/myproject'). Orients all tools to this project. Memory is stored per-project at <project>/.llm/memory.json."},
 			"key":       {Type: "string", Description: "Fact key using dot notation (e.g. 'style.comments', 'conventions.naming', 'decisions.engine'). Avoid keys like 'file.X' or 'location.Y' — those go stale."},
 			"value":     {Type: "string", Description: "Value to store. Required when saving. Omit to just recall."},
 			"delete":    {Type: "boolean", Description: "Set true to forget this key."},
@@ -73,7 +73,15 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
 	}
 	if a.Path == "" {
-		a.Path = "."
+		a.Path = server.ProjectRoot
+	} else {
+		resolved := a.Path
+		if r, err := filepath.EvalSymlinks(a.Path); err == nil {
+			resolved = r
+		}
+		if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+			server.ProjectRoot = resolved
+		}
 	}
 
 	fp, err := storePath(a.Path)

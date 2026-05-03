@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/counttokens"
 	"github.com/hedtahr/grepfunc/tools/filehead"
@@ -26,6 +28,12 @@ import (
 )
 
 func main() {
+	projectRoot := flag.String("project-root", "", "override project root directory")
+	flag.Parse()
+	if *projectRoot != "" {
+		server.ProjectRoot = *projectRoot
+	}
+
 	s := server.New("patch-file", "0.9.0")
 	s.Register(patchedit.Tool, patchedit.Handle)
 	s.Register(grepfunc.Tool, grepfunc.Handle)

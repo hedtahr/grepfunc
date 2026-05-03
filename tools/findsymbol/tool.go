@@ -18,7 +18,7 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name":           {Type: "string", Description: "Symbol name to find. Matches function/method/type names. Examples: 'Handle', 'UserService', 'findRelated'. Case-insensitive by default."},
-			"path":           {Type: "string", Description: "File or directory to search. Relative to project root or absolute. Defaults to project root."},
+			"path":           {Type: "string", Description: "MUST be absolute path to file or directory to search."},
 			"include":        {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. If omitted, auto-filtered to common source extensions."},
 			"kind":           {Type: "string", Description: "Filter by kind: 'func' (functions/methods only), 'type' (structs/classes/interfaces/enums only), or 'any' (default)."},
 			"max_results":    {Type: "integer", Description: "Max results. Default 10, max 30."},

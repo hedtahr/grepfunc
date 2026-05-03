@@ -20,7 +20,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":        {Type: "string", Description: "Root directory to search. Defaults to project root."},
+			"path":        {Type: "string", Description: "MUST be absolute path to root directory to search."},
 			"include":     {Type: "string", Description: "Glob to filter files for both declaration and reference search. E.g. '**/*.go'."},
 			"kind":        {Type: "string", Description: "Symbol kind to check: 'func', 'type', or 'all' (default)."},
 			"min_lines":   {Type: "integer", Description: "Skip symbols with body shorter than this many lines. Default 2 (skips trivial one-liners)."},

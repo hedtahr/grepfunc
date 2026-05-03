@@ -20,7 +20,7 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name":           {Type: "string", Description: "Symbol name to find references to. Matched as a whole word (word-boundary)."},
-			"path":           {Type: "string", Description: "File or directory to search. Defaults to project root."},
+			"path":           {Type: "string", Description: "MUST be absolute path to file or directory to search."},
 			"include":        {Type: "string", Description: "Glob filter. Defaults to all source files."},
 			"context_lines":  {Type: "integer", Description: "Lines before/after each reference. Default 2, max 8."},
 			"case_sensitive": {Type: "boolean", Description: "Default false."},

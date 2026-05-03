@@ -17,7 +17,7 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"pattern":         {Type: "string", Description: "Regex pattern to match against function names or code. Matches anywhere inside a function's lines — not just the signature. Examples: 'func.*Handler', 'def process', 'return', 'TODO'."},
-			"path":            {Type: "string", Description: "File or directory to search. Relative to project root or absolute. Defaults to project root."},
+			"path":            {Type: "string", Description: "MUST be absolute path to file or directory to search"},
 			"include":         {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions."},
 			"max_results":     {Type: "integer", Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases to reduce token usage."},
 			"offset":          {Type: "integer", Description: "Starting position for paginated results (0-based)."},

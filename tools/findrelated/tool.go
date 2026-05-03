@@ -20,7 +20,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":         {Type: "string", Description: "Path to the source file. Relative to project root or absolute. Defaults to last file from file_head/patch_file/find_related in this session."},
+			"path":         {Type: "string", Description: "MUST be absolute path to the source file. Defaults to last file operated on in this session."},
 			"compact":      {Type: "boolean", Description: "Terse output: less whitespace, no category labels. Default false."},
 			"with_symbols": {Type: "boolean", Description: "If true, include top-level function and type names found in each related file. Saves the find_related → file_symbols two-step."},
 		},

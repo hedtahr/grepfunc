@@ -16,7 +16,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":    {Type: "string", Description: "Path to the file. Relative to project root (e.g. 'src/main.go') or absolute. The project root directory name prefix is also accepted (e.g. 'myproject/src/main.go'). Defaults to the last file operated on in this session."},
+			"path":    {Type: "string", Description: "MUST be absolute path to the FILE (e.g. '/Users/you/project/src/main.go'). Defaults to last file operated on in this session."},
 			"lines":   {Type: "integer", Description: "How many lines to read from the top. Default 60. Max 200. Ignored when start/end are set."},
 			"start":   {Type: "integer", Description: "First line to read (1-based). Use with end to read a specific range anywhere in the file."},
 			"end":     {Type: "integer", Description: "Last line to read (1-based, inclusive). Use with start to read a specific range."},

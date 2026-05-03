@@ -24,10 +24,10 @@ var BatchTool = server.Tool{
 			"glob":          {Type: "string", Description: "Glob pattern to select target files. E.g. '**/*.go', 'src/**/*.ts'. Matched against all files under project root."},
 			"edits":         {Type: "array", Description: "Array of {old_text, new_text, replace_all?} edit operations to apply to every matched file.", Items: &server.Property{Type: "object", Description: "Edit op: old_text, new_text, optional replace_all."}},
 			"dry_run":       {Type: "boolean", Description: "Preview which files would change without writing. Shows per-file match counts."},
-			"fail_fast":     {Type: "boolean", Description: "If true, skip files where any edit fails to match (don't partially edit them)."},
+			"fail_fast":     {Type: "boolean", Description: "If true (default), skip files where any edit fails to match — don't partially edit them. Set false to apply successful edits even when some fail."},
 			"skip_validate": {Type: "boolean", Description: "Skip post-write validation (go vet / rustc / python ast)."},
 			"no_diff":       {Type: "boolean", Description: "Omit per-file diff output. Set true for summary-only (saves tokens). Set false to see per-file diffs."},
-			"path":          {Type: "string", Description: "Root directory to search. Defaults to project root."},
+			"path":          {Type: "string", Description: "MUST be absolute path — root directory to search. Always provide explicitly; do not rely on default."},
 		},
 		Required: []string{"glob", "edits"},
 	},
@@ -205,7 +205,7 @@ func processBatchFile(path string, a batchArgs) *fileResult {
 		}
 	}
 
-	if a.FailFast && anyFail {
+	if anyFail {
 		fr.skipped = true
 		return fr
 	}
@@ -229,9 +229,6 @@ func processBatchFile(path string, a batchArgs) *fileResult {
 	}
 
 	if !a.DryRun {
-		bp := backupPath(path)
-		os.MkdirAll(filepath.Dir(bp), 0755)
-		os.WriteFile(bp, original, 0644)
 		os.WriteFile(path, current, 0644)
 		if !a.SkipValidate {
 			if warn := runValidate(path); warn != "" {

@@ -22,7 +22,7 @@ var Tool = server.Tool{
 		Properties: map[string]server.Property{
 			"old_name":       {Type: "string", Description: "Symbol name to rename."},
 			"new_name":       {Type: "string", Description: "New name for the symbol."},
-			"path":           {Type: "string", Description: "Root directory to search. Defaults to project root."},
+			"path":           {Type: "string", Description: "MUST be absolute path to root directory to search."},
 			"include":        {Type: "string", Description: "Glob filter e.g. '**/*.go'. Defaults to all source files."},
 			"kind":           {Type: "string", Description: "Filter declaration kind: 'func', 'type', or 'any' (default). Only affects dry-run declaration count; replacements always use word-boundary."},
 			"dry_run":        {Type: "boolean", Description: "Preview changes without writing files."},
@@ -121,13 +121,6 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		totalReplacements += len(matches)
 
 		if !a.DryRun {
-			bp := backupPath(path)
-			os.MkdirAll(filepath.Dir(bp), 0755)
-			// Rotate backups (3 levels: .bak, .bak.1, .bak.2)
-			os.Rename(bp+".2", bp+".3")
-			os.Rename(bp+".1", bp+".2")
-			os.Rename(bp, bp+".1")
-			os.WriteFile(bp, data, 0644)
 			// Atomic write via tmp + rename
 			tmpPath := path + ".tmp"
 			os.Remove(tmpPath)
@@ -171,10 +164,4 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
 	}, nil
-}
-
-func backupPath(path string) string {
-	rel := server.RelPath(path)
-	encoded := strings.ReplaceAll(rel, "/", "_")
-	return filepath.Join(server.ProjectRoot, ".patch_backup", encoded+".bak")
 }

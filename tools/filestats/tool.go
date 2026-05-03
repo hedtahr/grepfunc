@@ -20,7 +20,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":    {Type: "string", Description: "Root to analyze. Defaults to project root."},
+			"path":    {Type: "string", Description: "MUST be absolute path to root directory to analyze."},
 			"include": {Type: "string", Description: "Glob filter. Defaults to all source files (\"*\")."},
 			"depth":   {Type: "integer", Description: "Max directory depth to group by. Default 2, max 5. Dirs deeper than this are folded into their parent at depth."},
 			"compact": {Type: "boolean", Description: "Terse output: one line per dir, no header. Default false."},
