@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/hedtahr/grepfunc/server"
@@ -31,6 +32,7 @@ var Tool = server.Tool{
 			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of one header per match. Format: '### path/file.go (N matches)'. Reduces noise for multi-file searches. Default false."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode."},
 			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited)."},
+			"count_only":     {Type: "boolean", Description: "Return match counts per file only — no content. Zero content tokens."},
 		},
 		Required: []string{"pattern"},
 	},
@@ -49,6 +51,7 @@ type args struct {
 	GroupByFile   bool   `json:"group_by_file"`
 	NamesOnly     bool   `json:"names_only"`
 	TokenBudget   int    `json:"token_budget"`
+	CountOnly     bool   `json:"count_only"`
 }
 
 type window struct {
@@ -179,6 +182,32 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	start := min(a.Offset, total)
 	end := min(a.Offset+a.MaxResults, total)
 	page := all[start:end]
+
+	if a.CountOnly {
+		counts := make(map[string]int)
+		var files []string
+		for _, w := range all {
+			if _, seen := counts[w.relPath]; !seen {
+				files = append(files, w.relPath)
+			}
+			counts[w.relPath]++
+		}
+		sort.Strings(files)
+		suffix := ""
+		if !scannedAll {
+			suffix = "+"
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d%s matches for %q\n", total, suffix, a.Pattern)
+		sb.WriteString("```\n")
+		for _, fp := range files {
+			fmt.Fprintf(&sb, "%s: %d\n", fp, counts[fp])
+		}
+		sb.WriteString("```\n")
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
+		}, nil
+	}
 
 	compact := a.Compact
 	var sb strings.Builder

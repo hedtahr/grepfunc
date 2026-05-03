@@ -9,6 +9,7 @@ import (
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/tools/internal/util"
 )
 
 var Tool = server.Tool{
@@ -151,7 +152,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 				}
 				fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
 			} else {
-				sigLine := firstSigLine(m.Body)
+				sigLine := util.FirstSigLine(m.Body)
 				if sigLine != "" {
 					fmt.Fprintf(&buf, "```%s\n%s\n```", ext, sigLine)
 				}
@@ -179,14 +180,6 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}, nil
 }
 
-func firstSigLine(body string) string {
-	line, _, _ := strings.Cut(body, "\n")
-	line = strings.TrimSpace(line)
-	if len(line) > 120 {
-		return line[:120] + "..."
-	}
-	return line
-}
 
 func searchSymbols(a args, pattern *regexp.Regexp) []grepfunc.FuncMatch {
 	var results []grepfunc.FuncMatch

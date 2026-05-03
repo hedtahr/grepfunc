@@ -96,14 +96,15 @@ func (s *Server) handle(req Request) *Response {
 		}
 		fmt.Fprintf(os.Stderr, "[mcp] initialize: rootPath=%q rootUri=%q roots=%d\n",
 			initParams.RootPath, initParams.RootURI, len(initParams.Roots))
-		// Write full params to tmp log for debugging
-		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-			fmt.Fprintf(f, "raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d\n",
-				string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
-			for i, r := range initParams.Roots {
-				fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
+		if os.Getenv("GREPFUNC_DEBUG") != "" {
+			if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+				fmt.Fprintf(f, "raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d\n",
+					string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
+				for i, r := range initParams.Roots {
+					fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
+				}
+				f.Close()
 			}
-			f.Close()
 		}
 		root := initParams.RootPath
 		if root == "" {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/tools/internal/util"
 )
 
 var Tool = server.Tool{
@@ -81,7 +82,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if a.Filter == "all" || a.Filter == "func" {
 		funcs, _ := grepfunc.Search(a.Path, include, matchAll, 500, grepfunc.IsFuncSig)
 		for _, f := range funcs {
-			sig := firstSigLine(f.Body)
+			sig := util.FirstSigLine(f.Body)
 			syms = append(syms, sym{file: f.File, line: f.Line, endLine: f.EndLine, kind: "func", sig: sig})
 		}
 	}
@@ -89,7 +90,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if a.Filter == "all" || a.Filter == "type" {
 		types, _ := grepfunc.Search(a.Path, include, matchAll, 500, grepfunc.IsStructSig)
 		for _, t := range types {
-			sig := firstSigLine(t.Body)
+			sig := util.FirstSigLine(t.Body)
 			syms = append(syms, sym{file: t.File, line: t.Line, endLine: t.EndLine, kind: "type", sig: sig})
 		}
 	}
@@ -171,7 +172,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			group := byFile[fr]
 			fmt.Fprintf(&buf, "\n### %s (%d)\n```\n", fr, len(group))
 			for _, s := range group {
-				fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, trimKind(s.sig))
+				fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, util.TrimKind(s.sig))
 			}
 			buf.WriteString("```\n")
 		}
@@ -183,7 +184,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 		buf.WriteString("```\n")
 		for _, s := range syms {
-			fmt.Fprintf(&buf, "L%-4d %-5s %s\n", s.line, s.kind, trimKind(s.sig))
+			fmt.Fprintf(&buf, "L%-4d %-5s %s\n", s.line, s.kind, util.TrimKind(s.sig))
 		}
 		buf.WriteString("```\n")
 		if len(syms) == 0 {
@@ -224,20 +225,3 @@ func removeNested(syms []sym) []sym {
 	return out
 }
 
-func trimKind(sig string) string {
-	for _, kw := range []string{"func ", "type ", "var ", "const ", "interface ", "struct "} {
-		if s, ok := strings.CutPrefix(sig, kw); ok {
-			return s
-		}
-	}
-	return sig
-}
-
-func firstSigLine(body string) string {
-	line, _, _ := strings.Cut(body, "\n")
-	line = strings.TrimSpace(line)
-	if len(line) > 120 {
-		return line[:120] + "..."
-	}
-	return line
-}

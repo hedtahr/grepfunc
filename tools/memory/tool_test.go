@@ -154,6 +154,28 @@ func TestStorePath(t *testing.T) {
 	}
 }
 
+func TestRecallCodeFenceFormat(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	saveKV(t, "style.indent", "tabs")
+
+	raw, _ := json.Marshal(map[string]any{})
+	result, err := Handle(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "```\n") {
+		t.Errorf("recall list output should be wrapped in code fences, got:\n%s", text)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(text), "```") {
+		t.Errorf("recall list output should end with closing code fence, got:\n%s", text)
+	}
+}
+
 func saveKV(t *testing.T, key, value string) {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]any{"key": key, "value": value})

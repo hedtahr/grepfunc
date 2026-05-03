@@ -8,6 +8,7 @@ import (
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/tools/internal/util"
 )
 
 var Tool = server.Tool{
@@ -85,7 +86,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	if a.ExcludePattern != "" {
-		results, err = filterByExclude(results, a.ExcludePattern)
+		results, err = util.FilterByExclude(results, a.ExcludePattern)
 		if err != nil {
 			return nil, fmt.Errorf("exclude_pattern: %v", err)
 		}
@@ -123,9 +124,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			continue
 		}
 		if includeBody {
-			fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, true))
+			fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, util.FirstLine(m.Body, true))
 		} else {
-			fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, false))
+			fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, util.FirstLine(m.Body, false))
 		}
 		if includeBody {
 			ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
@@ -152,29 +153,4 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil
-}
-
-func firstLine(s string, includeBody bool) string {
-	if before, _, found := strings.Cut(s, "\n"); found {
-		s = strings.TrimSpace(before)
-	}
-	if !includeBody && len(s) > 120 {
-		return s[:120] + "..."
-	}
-	return s
-}
-
-func filterByExclude(matches []grepfunc.FuncMatch, excludePattern string) ([]grepfunc.FuncMatch, error) {
-	re, err := grepfunc.CompilePattern(excludePattern, false)
-	if err != nil {
-		return nil, err
-	}
-	out := matches[:0]
-	for _, m := range matches {
-		if re.MatchString(m.Body) || re.MatchString(m.Name) {
-			continue
-		}
-		out = append(out, m)
-	}
-	return out, nil
 }

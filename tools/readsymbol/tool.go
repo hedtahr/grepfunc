@@ -9,6 +9,7 @@ import (
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/tools/internal/util"
 )
 
 var Tool = server.Tool{
@@ -162,7 +163,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	fmt.Fprintf(&buf, "%d symbol%s matching %q in %s:\n", len(matches), plural, a.Name, rel)
 
 	for _, m := range matches {
-		fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, false))
+		fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, util.FirstLine(m.Body, false))
 
 		body := m.Body
 		if a.Summary {
@@ -180,12 +181,3 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}, nil
 }
 
-func firstLine(s string, includeBody bool) string {
-	if before, _, found := strings.Cut(s, "\n"); found {
-		s = strings.TrimSpace(before)
-	}
-	if !includeBody && len(s) > 120 {
-		return s[:120] + "..."
-	}
-	return s
-}
