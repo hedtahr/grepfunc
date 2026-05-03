@@ -19,9 +19,10 @@ type Server struct {
 	tools       []ToolEntry
 	projectRoot string
 
-	writeMu   sync.Mutex
-	pending   sync.Map // string(id) → chan rawResponse
-	nextReqID atomic.Int64
+	writeMu        sync.Mutex
+	pending        sync.Map // string(id) → chan rawResponse
+	nextReqID      atomic.Int64
+	clientHasRoots bool
 }
 
 type rawResponse struct {
@@ -126,17 +127,16 @@ func (s *Server) handle(req Request) *Response {
 		}
 		fmt.Fprintf(os.Stderr, "[mcp] initialize: rootPath=%q rootUri=%q roots=%d\n",
 			initParams.RootPath, initParams.RootURI, len(initParams.Roots))
-		if os.Getenv("GREPFUNC_DEBUG") != "" {
-			if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-				fmt.Fprintf(f, "raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d\n",
-					string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
-				for i, r := range initParams.Roots {
-					fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
-				}
-				fmt.Fprintf(f, "  caps.roots=%v\n", initParams.Capabilities.Roots != nil)
-				f.Close()
+		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			fmt.Fprintf(f, "raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d\n",
+				string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
+			for i, r := range initParams.Roots {
+				fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
 			}
+			fmt.Fprintf(f, "  caps.roots=%v\n", initParams.Capabilities.Roots != nil)
+			f.Close()
 		}
+		s.clientHasRoots = initParams.Capabilities.Roots != nil
 		root := initParams.RootPath
 		if root == "" {
 			root = initParams.RootURI
@@ -146,28 +146,58 @@ func (s *Server) handle(req Request) *Response {
 		}
 		root = strings.TrimPrefix(root, "file://")
 		editorProvided := root != ""
+		var cwdAtStart, exePath string
+		cwdAtStart, _ = os.Getwd()
+		exePath, _ = os.Executable()
 		if root == "" {
 			if r := os.Getenv("PROJECT_ROOT"); r != "" {
 				root = r
 				editorProvided = true
 			} else {
-				root, _ = os.Getwd()
+				root = cwdAtStart
+				// If cwd is empty or filesystem root, walk up from executable dir.
+				if root == "" || root == "/" {
+					if exePath != "" {
+						root = FindProjectRoot(filepath.Dir(exePath))
+					}
+				}
+				// Last resort: read cached root from previous session.
+				if root == "" || root == "/" {
+					root = readCachedRoot()
+				}
 			}
 		}
 		// normalize away symlinks (macOS /Users → /private/Users)
-		if resolved, err := filepath.EvalSymlinks(root); err == nil {
-			root = resolved
+		if root != "" {
+			if resolved, err := filepath.EvalSymlinks(root); err == nil {
+				root = resolved
+			}
 		}
 		s.projectRoot = root
 		ProjectRoot = root
+		// Persist for next auto-start.
+		if root != "" && root != "/" {
+			go writeCachedRoot(root)
+		}
+		// Append resolved root + existence check to init log
+		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			_, statErr := os.Stat(root)
+			fmt.Fprintf(f, "ProjectRoot=%q exists=%v editorProvided=%v clientHasRoots=%v\ncwd=%q exe=%q\n",
+				root, statErr == nil, editorProvided, s.clientHasRoots, cwdAtStart, exePath)
+			f.Close()
+		}
 		if editorProvided {
 			projectRootLocked = true
 			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (locked from initialize)\n", ProjectRoot)
+		} else if root == "" {
+			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot unset — waiting for cwd from first tool call\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (cwd fallback, not locked — will try roots/list)\n", ProjectRoot)
+			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (cwd fallback, not locked)\n", ProjectRoot)
 		}
-		go persistProjectRoot(root)
-		go autoDiscover(root)
+		if root != "" {
+			go persistProjectRoot(root)
+			go autoDiscover(root)
+		}
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -179,7 +209,7 @@ func (s *Server) handle(req Request) *Response {
 		}
 
 	case "notifications/initialized":
-		if !projectRootLocked {
+		if !projectRootLocked && s.clientHasRoots {
 			go s.requestRoots()
 		}
 		return nil
@@ -204,6 +234,11 @@ func (s *Server) handle(req Request) *Response {
 		if len(args) == 0 {
 			args = params.Args
 		}
+		// Log first tool call to init log so we can see what Zed sends
+		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			fmt.Fprintf(f, "[call] tool=%s args=%s\n", params.Name, string(args))
+			f.Close()
+		}
 		// Allow per-call cwd override (Zed may not send rootPath in initialize)
 		var cwdExtract struct {
 			CWD string `json:"cwd"`
@@ -214,8 +249,23 @@ func (s *Server) handle(req Request) *Response {
 				cwdExtract.CWD = resolved
 			}
 			if info, err := os.Stat(cwdExtract.CWD); err == nil && info.IsDir() {
-				ProjectRoot = cwdExtract.CWD
-				s.projectRoot = cwdExtract.CWD
+				if cwdExtract.CWD != ProjectRoot {
+					wasEmpty := ProjectRoot == ""
+					fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot switch: %q → %q\n", ProjectRoot, cwdExtract.CWD)
+					if f, err2 := os.OpenFile("/tmp/grepfunc-init.log", os.O_WRONLY|os.O_APPEND, 0644); err2 == nil {
+						fmt.Fprintf(f, "[switch] %q → %q\n", ProjectRoot, cwdExtract.CWD)
+						f.Close()
+					}
+					ProjectRoot = cwdExtract.CWD
+					s.projectRoot = cwdExtract.CWD
+					if wasEmpty {
+						go persistProjectRoot(cwdExtract.CWD)
+						go autoDiscover(cwdExtract.CWD)
+					}
+				} else {
+					ProjectRoot = cwdExtract.CWD
+					s.projectRoot = cwdExtract.CWD
+				}
 			}
 		}
 
@@ -454,6 +504,30 @@ func persistProjectRoot(root string) {
 }
 
 // FindProjectRoot walks up from dir looking for a project marker file.
+// cachedRootFile returns the path to the persisted last-known project root.
+func cachedRootFile() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "grepfunc", "last_root")
+}
+
+func writeCachedRoot(root string) {
+	p := cachedRootFile()
+	os.MkdirAll(filepath.Dir(p), 0755)
+	os.WriteFile(p, []byte(root), 0644)
+}
+
+func readCachedRoot() string {
+	data, err := os.ReadFile(cachedRootFile())
+	if err != nil {
+		return ""
+	}
+	root := strings.TrimSpace(string(data))
+	if _, err := os.Stat(root); err != nil {
+		return ""
+	}
+	return root
+}
+
 func FindProjectRoot(dir string) string {
 	markers := []string{".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml", "setup.py", "Gemfile", "pom.xml", "build.gradle"}
 	for {
