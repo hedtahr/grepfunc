@@ -111,7 +111,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if compact {
 		buf.WriteString("\n")
 	} else {
-		buf.WriteString("\n\n")
+		buf.WriteString("\n")
 	}
 	for _, m := range page {
 		rel := server.RelPath(m.File)
@@ -145,7 +145,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			if compact {
 				buf.WriteString("\n")
 			} else {
-				buf.WriteString("\n\n")
+				buf.WriteString("\n")
 			}
 		}
 	}

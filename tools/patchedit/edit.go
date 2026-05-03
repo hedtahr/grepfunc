@@ -396,7 +396,7 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 
 	if !anyChange {
 		if failFastBlocked {
-			buf.WriteString("**fail_fast blocked all edits.**\n")
+			buf.WriteString("[BLOCKED] all edits\n")
 			for _, r := range results {
 				if r.Success {
 					fmt.Fprintf(&buf, "Edit %d: would have matched (%s, L%d-%d)\n",
@@ -414,11 +414,11 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
 	}
 
-	fmt.Fprintf(&buf, "**%s** — %d/%d edit(s) applied", path, successCount, len(results))
+	fmt.Fprintf(&buf, "%s — %d/%d", server.RelPath(path), successCount, len(results))
 	if !bytes.Equal(original, formatted) {
 		buf.WriteString(" (pre-formatted)")
 	}
-	buf.WriteString("\n\n")
+	buf.WriteString("\n")
 
 	// #13: terse dry_run table
 	if dryRun {
@@ -448,15 +448,15 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 		if r.Success {
 			switch {
 			case r.Matches[0].Strategy == "insert" && r.Matches[0].LineStart >= 1<<30:
-				fmt.Fprintf(&buf, "- Edit %d: **matched** (insert, EOF)\n", n)
+				fmt.Fprintf(&buf, "- Edit %d: ✓ insert EOF\n", n)
 			case r.Matches[0].Strategy == "insert":
-				fmt.Fprintf(&buf, "- Edit %d: **matched** (insert, L%d)\n", n, r.Matches[0].LineStart)
+				fmt.Fprintf(&buf, "- Edit %d: ✓ insert L%d\n", n, r.Matches[0].LineStart)
 			case len(r.Matches) > 1:
-				fmt.Fprintf(&buf, "- Edit %d: **matched** (%d\u00d7%s %s)\n",
+				fmt.Fprintf(&buf, "- Edit %d: ✓ %d×%s %s\n",
 					n, len(r.Matches), r.Matches[0].Strategy, confTier(r.Matches[0].Strategy))
 			default:
-				fmt.Fprintf(&buf, "- Edit %d: **matched** (%s %s, L%d-%d)\n",
-					n, r.Matches[0].Strategy, confTier(r.Matches[0].Strategy), r.Matches[0].LineStart, r.Matches[0].LineEnd)
+				fmt.Fprintf(&buf, "- Edit %d: ✓ L%d-%d %s %s\n",
+					n, r.Matches[0].LineStart, r.Matches[0].LineEnd, r.Matches[0].Strategy, confTier(r.Matches[0].Strategy))
 			}
 		} else {
 			fmt.Fprintf(&buf, "- Edit %d: \u274c %s\n", n, r.Error)

@@ -123,7 +123,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if a.Compact {
 		fmt.Fprintf(&buf, "%d symbols across %d files:\n", len(syms), totalFiles)
 	} else {
-		fmt.Fprintf(&buf, "%d symbol(s) across %d file(s) in %s:\n\n", len(syms), totalFiles, server.RelPath(a.Path))
+		fmt.Fprintf(&buf, "%d symbols across %d files in %s:\n", len(syms), totalFiles, server.RelPath(a.Path))
 	}
 
 	for _, fr := range fileOrder {
@@ -132,7 +132,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if a.Compact {
 			fmt.Fprintf(&buf, "### %s (%d)\n", fr, len(group))
 		} else {
-			fmt.Fprintf(&buf, "### %s — %d symbol(s)\n", fr, len(group))
+			fmt.Fprintf(&buf, "### %s — %d symbols\n", fr, len(group))
 		}
 		for _, s := range group {
 			fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, s.sig)

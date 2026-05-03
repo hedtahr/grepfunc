@@ -233,9 +233,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 				}
 			} else {
 				if scannedAll {
-					fmt.Fprintf(&out, "%d call site(s) for %q\n\n", total, a.Name)
+					fmt.Fprintf(&out, "%d callers of %q\n", total, a.Name)
 				} else {
-					fmt.Fprintf(&out, "%d+ call site(s) for %q (showing %d)\n\n", total, a.Name, shown)
+					fmt.Fprintf(&out, "%d+ callers of %q (showing %d)\n\n", total, a.Name, shown)
 				}
 			}
 		}
@@ -285,7 +285,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			if compact {
 				out.WriteByte('\n')
 			} else {
-				out.WriteString("\n\n")
+				out.WriteString("\n")
 			}
 		}
 

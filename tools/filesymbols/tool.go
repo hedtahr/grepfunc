@@ -144,7 +144,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	if a.CountOnly {
 		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("%d symbol(s) in %s", len(syms), rel)}},
+			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("%d symbols in %s", len(syms), rel)}},
 		}, nil
 	}
 
@@ -165,14 +165,14 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if compact {
 			fmt.Fprintf(&buf, "%d symbols across %d files in %s:\n", len(syms), totalFiles, rel)
 		} else {
-			fmt.Fprintf(&buf, "%d symbol(s) across %d file(s) in %s:\n\n", len(syms), totalFiles, rel)
+			fmt.Fprintf(&buf, "%d symbols across %d files in %s:\n\n", len(syms), totalFiles, rel)
 		}
 		for _, fr := range fileOrder {
 			group := byFile[fr]
 			if compact {
 				fmt.Fprintf(&buf, "### %s (%d)\n", fr, len(group))
 			} else {
-				fmt.Fprintf(&buf, "### %s — %d symbol(s)\n", fr, len(group))
+				fmt.Fprintf(&buf, "### %s (%d)\n", fr, len(group))
 			}
 			for _, s := range group {
 				fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, s.sig)
@@ -185,7 +185,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if compact {
 			fmt.Fprintf(&buf, "%d symbols %s:\n", len(syms), rel)
 		} else {
-			fmt.Fprintf(&buf, "%d symbol(s) in %s:\n\n", len(syms), rel)
+			fmt.Fprintf(&buf, "%d symbols in %s:\n\n", len(syms), rel)
 		}
 		for _, s := range syms {
 			fmt.Fprintf(&buf, "L%-4d %-5s %s\n", s.line, s.kind, s.sig)

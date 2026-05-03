@@ -151,11 +151,11 @@ func BatchHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if a.DryRun {
 		action = "[DRY RUN] Would apply"
 	}
-	fmt.Fprintf(&buf, "%s %d edit(s) across %d file(s)", action, totalEdits, totalFiles)
+	fmt.Fprintf(&buf, "%s %d edits across %d files", action, totalEdits, totalFiles)
 	if failCount > 0 {
-		fmt.Fprintf(&buf, " (%d file(s) with failures)", failCount)
+		fmt.Fprintf(&buf, " (%d files with failures)", failCount)
 	}
-	buf.WriteString("\n\n")
+	buf.WriteString("\n")
 
 	for _, fr := range fileResults {
 		if fr.skipped {

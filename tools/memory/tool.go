@@ -153,7 +153,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			}, nil
 		}
 		var buf strings.Builder
-		fmt.Fprintf(&buf, "%d match(es) for %q:\n\n", len(matched), a.Search)
+		fmt.Fprintf(&buf, "%d matches for %q:\n\n", len(matched), a.Search)
 		for _, e := range matched {
 			fmt.Fprintf(&buf, "**%s** → %s\n", e.Key, e.Value)
 		}

@@ -159,7 +159,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if len(matches) > 1 {
 		plural = "s"
 	}
-	fmt.Fprintf(&buf, "%d symbol%s matching %q in %s:\n\n", len(matches), plural, a.Name, rel)
+	fmt.Fprintf(&buf, "%d symbol%s matching %q in %s:\n", len(matches), plural, a.Name, rel)
 
 	for _, m := range matches {
 		fmt.Fprintf(&buf, "%s:%d-%d: **[%s]** %s\n", rel, m.Line, m.EndLine, m.Kind, firstLine(m.Body, false))
@@ -172,7 +172,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			}
 			body = grepfunc.SummarizeBody(body, sl)
 		}
-		fmt.Fprintf(&buf, "```%s\n%s\n```\n\n", ext, strings.TrimRight(body, "\n"))
+		fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(body, "\n"))
 	}
 
 	return &server.ToolCallResult{

@@ -186,7 +186,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if compact {
 			sb.WriteString(fmt.Sprintf("0 matches %q\n", a.Pattern))
 		} else {
-			sb.WriteString(fmt.Sprintf("0 match(es) for %q\n", a.Pattern))
+			sb.WriteString(fmt.Sprintf("0 matches for %q\n", a.Pattern))
 		}
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
@@ -200,7 +200,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if compact {
 		sb.WriteString(fmt.Sprintf("%d%s matches %q", total, suffix, a.Pattern))
 	} else {
-		sb.WriteString(fmt.Sprintf("%d%s match(es) for %q", total, suffix, a.Pattern))
+		sb.WriteString(fmt.Sprintf("%d%s matches for %q", total, suffix, a.Pattern))
 	}
 	if a.Offset > 0 || end < total {
 		sb.WriteString(fmt.Sprintf(" (showing %d\u2013%d)", start+1, end))
@@ -265,7 +265,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			if compact {
 				fmt.Fprintf(&sb, "### %s (%d)\n", g.relPath, len(g.windows))
 			} else {
-				fmt.Fprintf(&sb, "\n### %s — %d match(es)\n", g.relPath, len(g.windows))
+				fmt.Fprintf(&sb, "\n### %s — %d matches\n", g.relPath, len(g.windows))
 			}
 			for _, w := range g.windows {
 				renderWindow(w)

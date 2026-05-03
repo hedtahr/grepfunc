@@ -131,7 +131,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			startLine = 1
 		}
 
-		fmt.Fprintf(&buf, "%d match(es) for /%s/ in %q (%s:L%d-%d):\n\n",
+		fmt.Fprintf(&buf, "%d matches for /%s/ in %q (%s:L%d-%d):\n\n",
 			len(hitIdxs), a.Pattern, sym.Name, rel, startLine, sym.EndLine)
 
 		// Build merged windows

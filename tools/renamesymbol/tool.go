@@ -147,7 +147,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if len(changes) == 0 {
 		fmt.Fprintf(&sb, "No occurrences of %q found.\n", a.OldName)
 	} else {
-		fmt.Fprintf(&sb, "Renamed %q → %q: %d replacement(s) across %d file(s)\n\n",
+		fmt.Fprintf(&sb, "Renamed %q → %q: %d replacements across %d files\n",
 			a.OldName, a.NewName, totalReplacements, len(changes))
 		for _, c := range changes {
 			plural := "replacements"

@@ -96,7 +96,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			var buf strings.Builder
 			fmt.Fprintf(&buf, "No symbols found for %q.\n\nDid you mean:\n", a.Name)
 			for _, s := range suggestions {
-				fmt.Fprintf(&buf, "- %s:%d: **%s**\n", server.RelPath(s.File), s.Line, s.Name)
+				fmt.Fprintf(&buf, "- %s:%d: %s\n", server.RelPath(s.File), s.Line, s.Name)
 			}
 			return &server.ToolCallResult{
 				Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},

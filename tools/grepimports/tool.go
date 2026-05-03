@@ -158,7 +158,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	if a.NamesOnly {
 		var buf strings.Builder
-		fmt.Fprintf(&buf, "%d file(s) importing %q:\n", len(results), a.Module)
+		fmt.Fprintf(&buf, "%d files importing %q:\n", len(results), a.Module)
 		for _, f := range results {
 			for _, e := range f.imports {
 				fmt.Fprintf(&buf, "%s:%s\n", f.relPath, e.path)
@@ -406,7 +406,7 @@ func renderFileImports(relPath string, entries []importEntry, compact bool) *ser
 	if compact {
 		fmt.Fprintf(&buf, "%d imports in %s:\n", len(entries), relPath)
 	} else {
-		fmt.Fprintf(&buf, "%d import(s) in %s:\n\n", len(entries), relPath)
+		fmt.Fprintf(&buf, "%d imports in %s:\n", len(entries), relPath)
 	}
 	for _, e := range entries {
 		switch {
@@ -433,7 +433,7 @@ func renderSearchResults(module string, results []fileImports, compact bool, bod
 	if compact {
 		fmt.Fprintf(&buf, "%d files import %q:\n", len(results), module)
 	} else {
-		fmt.Fprintf(&buf, "%d file(s) importing %q:\n\n", len(results), module)
+		fmt.Fprintf(&buf, "%d files importing %q:\n", len(results), module)
 	}
 	for _, f := range results {
 		var allSyms []string
@@ -481,7 +481,7 @@ func renderSearchResults(module string, results []fileImports, compact bool, bod
 				if compact {
 					buf.WriteByte('\n')
 				} else {
-					buf.WriteString("\n\n")
+					buf.WriteString("\n")
 				}
 			}
 		}

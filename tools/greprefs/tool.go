@@ -217,9 +217,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			}
 		} else {
 			if scannedAll {
-				fmt.Fprintf(&buf, "%d reference(s) to %q\n\n", total, a.Name)
+				fmt.Fprintf(&buf, "%d refs for %q\n", total, a.Name)
 			} else {
-				fmt.Fprintf(&buf, "%d+ reference(s) to %q (showing %d)\n\n", total, a.Name, shown)
+				fmt.Fprintf(&buf, "%d+ refs for %q (showing %d)\n\n", total, a.Name, shown)
 			}
 		}
 	}
@@ -260,7 +260,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if a.Compact {
 			buf.WriteByte('\n')
 		} else {
-			buf.WriteString("\n\n")
+			buf.WriteString("\n")
 		}
 	}
 

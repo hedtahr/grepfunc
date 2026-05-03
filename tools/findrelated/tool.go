@@ -55,7 +55,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if compact {
 			fmt.Fprintf(&buf, "%d related %s:\n", len(related), a.Path)
 		} else {
-			fmt.Fprintf(&buf, "%d file(s) related to %s:\n\n", len(related), a.Path)
+			fmt.Fprintf(&buf, "%d files related to %s:\n", len(related), a.Path)
 		}
 		for _, r := range related {
 			relPath := server.RelPath(r)

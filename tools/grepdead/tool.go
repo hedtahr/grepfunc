@@ -237,7 +237,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if a.Compact {
 		fmt.Fprintf(&buf, "%d potentially dead symbols (of %d checked):\n", len(dead), checked)
 	} else {
-		fmt.Fprintf(&buf, "%d potentially dead symbol(s) (of %d checked):\n\n", len(dead), checked)
+		fmt.Fprintf(&buf, "%d potentially dead symbols (of %d checked):\n\n", len(dead), checked)
 	}
 	for _, d := range dead {
 		rel := server.RelPath(d.file)
