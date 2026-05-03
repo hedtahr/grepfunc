@@ -169,17 +169,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 		for _, fr := range fileOrder {
 			group := byFile[fr]
-			if compact {
-				fmt.Fprintf(&buf, "### %s (%d)\n", fr, len(group))
-			} else {
-				fmt.Fprintf(&buf, "### %s (%d)\n", fr, len(group))
-			}
+			fmt.Fprintf(&buf, "\n### %s (%d)\n```\n", fr, len(group))
 			for _, s := range group {
-				fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, s.sig)
+				fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, trimKind(s.sig))
 			}
-			if !compact {
-				buf.WriteByte('\n')
-			}
+			buf.WriteString("```\n")
 		}
 	} else {
 		if compact {
@@ -187,9 +181,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		} else {
 			fmt.Fprintf(&buf, "%d symbols in %s:\n\n", len(syms), rel)
 		}
+		buf.WriteString("```\n")
 		for _, s := range syms {
-			fmt.Fprintf(&buf, "L%-4d %-5s %s\n", s.line, s.kind, s.sig)
+			fmt.Fprintf(&buf, "L%-4d %-5s %s\n", s.line, s.kind, trimKind(s.sig))
 		}
+		buf.WriteString("```\n")
 		if len(syms) == 0 {
 			fmt.Fprintf(&buf, "(no %s symbols found — check filter or file extension)\n", ext)
 		}
@@ -226,6 +222,15 @@ func removeNested(syms []sym) []sym {
 		}
 	}
 	return out
+}
+
+func trimKind(sig string) string {
+	for _, kw := range []string{"func ", "type ", "var ", "const ", "interface ", "struct "} {
+		if s, ok := strings.CutPrefix(sig, kw); ok {
+			return s
+		}
+	}
+	return sig
 }
 
 func firstSigLine(body string) string {

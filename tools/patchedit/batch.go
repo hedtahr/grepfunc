@@ -210,9 +210,23 @@ func processBatchFile(path string, a batchArgs) *fileResult {
 		return fr
 	}
 
+	// Sort descending by match offset so each applyReplacement doesn't shift subsequent offsets.
+	applyOrder := make([]editResult, len(results))
+	copy(applyOrder, results)
+	sort.Slice(applyOrder, func(i, j int) bool {
+		iOff, jOff := 0, 0
+		if len(applyOrder[i].Matches) > 0 {
+			iOff = applyOrder[i].Matches[0].Offset
+		}
+		if len(applyOrder[j].Matches) > 0 {
+			jOff = applyOrder[j].Matches[0].Offset
+		}
+		return iOff > jOff
+	})
+
 	current := content
 	applied := 0
-	for _, r := range results {
+	for _, r := range applyOrder {
 		if r.Success {
 			current = applyReplacement(current, r)
 			applied++

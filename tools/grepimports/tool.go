@@ -435,6 +435,9 @@ func renderSearchResults(module string, results []fileImports, compact bool, bod
 	} else {
 		fmt.Fprintf(&buf, "%d files importing %q:\n", len(results), module)
 	}
+	if !body {
+		buf.WriteString("```\n")
+	}
 	for _, f := range results {
 		var allSyms []string
 		var aliases []string
@@ -456,11 +459,11 @@ func renderSearchResults(module string, results []fileImports, compact bool, bod
 		}
 		switch {
 		case len(allSyms) > 0:
-			fmt.Fprintf(&buf, "- %s%s → {%s}\n", f.relPath, lineTag, strings.Join(allSyms, ", "))
+			fmt.Fprintf(&buf, "%s%s → {%s}\n", f.relPath, lineTag, strings.Join(allSyms, ", "))
 		case len(aliases) > 0:
-			fmt.Fprintf(&buf, "- %s%s (as %s)\n", f.relPath, lineTag, strings.Join(aliases, ", "))
+			fmt.Fprintf(&buf, "%s%s (as %s)\n", f.relPath, lineTag, strings.Join(aliases, ", "))
 		default:
-			fmt.Fprintf(&buf, "- %s%s\n", f.relPath, lineTag)
+			fmt.Fprintf(&buf, "%s%s\n", f.relPath, lineTag)
 		}
 		if body {
 			// Re-read file to show matched import lines
@@ -485,6 +488,9 @@ func renderSearchResults(module string, results []fileImports, compact bool, bod
 				}
 			}
 		}
+	}
+	if !body {
+		buf.WriteString("```\n")
 	}
 	return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}
 }

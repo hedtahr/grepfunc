@@ -112,7 +112,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}, nil
 	}
 
-	if !a.StatOnly {
+	if a.StatOnly {
+		text = "```\n" + text + "\n```"
+	} else {
 		text = "```diff\n" + text + "\n```"
 	}
 

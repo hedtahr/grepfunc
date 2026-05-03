@@ -705,9 +705,9 @@ func Bar() string { return "bar" }
 	if text == "" {
 		t.Fatal("empty output")
 	}
-	// Must NOT contain code block markers
-	if strings.Contains(text, "\x60\x60\x60") {
-		t.Error("body=false output should not contain code blocks")
+	// sig-only mode wraps results in a code fence for markdown rendering
+	if !strings.Contains(text, "\x60\x60\x60") {
+		t.Error("body=false output should contain a code fence wrapper")
 	}
 	// Must contain function names
 	if !strings.Contains(text, "Foo") || !strings.Contains(text, "Bar") {

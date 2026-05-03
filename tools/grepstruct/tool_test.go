@@ -65,8 +65,8 @@ func TestBodyFalseSignatureOnly(t *testing.T) {
 	if text == "" {
 		t.Fatal("empty output")
 	}
-	if strings.Contains(text, "\x60\x60\x60") {
-		t.Error("body=false should not contain code blocks")
+	if !strings.Contains(text, "\x60\x60\x60") {
+		t.Error("body=false should contain a code fence wrapper")
 	}
 	if !strings.Contains(text, "User") {
 		t.Error("should still contain struct name")

@@ -192,16 +192,14 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(string(selected), "\n"))
 	} else {
 		if a.Lines < totalLines {
-			fmt.Fprintf(&buf, "First %d of %d lines — %s (%.0f%% shown):\n\n",
-				a.Lines, totalLines, rel, float64(a.Lines)/float64(totalLines)*100)
+			fmt.Fprintf(&buf, "First %d of %d lines — %s:\n\n",
+				a.Lines, totalLines, rel)
 		} else {
 			fmt.Fprintf(&buf, "All %d lines — %s:\n\n", totalLines, rel)
 		}
 		fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(string(selected), "\n"))
-		if a.Lines < totalLines {
-			fmt.Fprintf(&buf, "\n%d lines remaining. Use start/end or adjust `lines` to see more.", totalLines-a.Lines)
-		}
 	}
+
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil

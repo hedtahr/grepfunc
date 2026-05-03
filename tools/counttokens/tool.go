@@ -80,12 +80,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	var buf strings.Builder
 	rel := server.RelPath(a.Path)
-	fmt.Fprintf(&buf, "%s%s\n", rel, rangeDesc)
-	fmt.Fprintf(&buf, "- Lines: %d", len(target))
+	fmt.Fprintf(&buf, "%s%s\n```\n", rel, rangeDesc)
+	fmt.Fprintf(&buf, "Lines: %d", len(target))
 	if a.StartLine <= 0 && a.EndLine <= 0 {
 		fmt.Fprintf(&buf, " (of %d total)", totalLines)
 	}
-	fmt.Fprintf(&buf, "\n- Chars: %d\n- Est. tokens: ~%d\n", charCount, estTokens)
+	fmt.Fprintf(&buf, "\nChars: %d\nEst. tokens: ~%d\n```\n", charCount, estTokens)
 
 	switch {
 	case estTokens > dangerThreshold:

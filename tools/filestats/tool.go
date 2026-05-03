@@ -151,9 +151,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if compact {
 		fmt.Fprintf(&buf, "%s %d files %d lines", server.RelPath(a.Path), totalFiles, totalLines)
 	} else {
-		fmt.Fprintf(&buf, "File stats for %s (%d files, %d total lines)\n\n", server.RelPath(a.Path), totalFiles, totalLines)
+		fmt.Fprintf(&buf, "File stats for %s (%d files, %d total lines)\n", server.RelPath(a.Path), totalFiles, totalLines)
 	}
-
+	buf.WriteString("```\n")
 	for _, dir := range dirs {
 		s := stats[dir]
 		if compact {
@@ -167,6 +167,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	} else {
 		fmt.Fprintf(&buf, "%-30s %6d files %6d lines\n", "TOTAL", totalFiles, totalLines)
 	}
+	buf.WriteString("```\n")
 
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},

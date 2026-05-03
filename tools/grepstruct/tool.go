@@ -103,15 +103,14 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if compact {
 		fmt.Fprintf(&buf, "%d defs %q", total, a.Pattern)
 	} else {
-		fmt.Fprintf(&buf, "%d definition(s) matching %q", total, a.Pattern)
+		fmt.Fprintf(&buf, "%d definitions matching %q", total, a.Pattern)
 	}
 	if total > a.MaxResults || a.Offset > 0 {
 		fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
 	}
-	if compact {
-		buf.WriteString("\n")
-	} else {
-		buf.WriteString("\n")
+	buf.WriteString("\n")
+	if !includeBody {
+		buf.WriteString("```\n")
 	}
 	for _, m := range page {
 		rel := server.RelPath(m.File)
@@ -141,13 +140,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 				}
 				body = grepfunc.SummarizeBody(body, sl)
 			}
-			fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
-			if compact {
-				buf.WriteString("\n")
-			} else {
-				buf.WriteString("\n")
-			}
+			fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(body, "\n"))
 		}
+	}
+	if !includeBody {
+		buf.WriteString("```\n")
 	}
 	if end < total {
 		fmt.Fprintf(&buf, "\n%d more results. Use offset=%d for next page.", total-end, end)

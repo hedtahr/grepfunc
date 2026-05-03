@@ -130,21 +130,28 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		group := byFile[fr]
 		sort.Slice(group, func(i, j int) bool { return group[i].line < group[j].line })
 		if a.Compact {
-			fmt.Fprintf(&buf, "### %s (%d)\n", fr, len(group))
+			fmt.Fprintf(&buf, "### %s (%d)\n```\n", fr, len(group))
 		} else {
-			fmt.Fprintf(&buf, "### %s — %d symbols\n", fr, len(group))
+			fmt.Fprintf(&buf, "\n### %s — %d symbols\n```\n", fr, len(group))
 		}
 		for _, s := range group {
-			fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, s.sig)
+			fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, trimKind(s.sig))
 		}
-		if !a.Compact {
-			buf.WriteByte('\n')
-		}
+		buf.WriteString("```\n")
 	}
 
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil
+}
+
+func trimKind(sig string) string {
+	for _, kw := range []string{"func ", "type ", "var ", "const ", "interface ", "struct "} {
+		if s, ok := strings.CutPrefix(sig, kw); ok {
+			return s
+		}
+	}
+	return sig
 }
 
 func firstSig(body string) string {

@@ -27,7 +27,7 @@ var Tool = server.Tool{
 			"summary_lines":   {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
 			"names_only":      {Type: "boolean", Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans."},
 			"include_types":   {Type: "boolean", Description: "If true, also return type definitions (struct/class/interface/enum) in the results. Combines grep_func + grep_struct in one call."},
-			"sig_lines":       {Type: "integer", Description: "Lines of signature to show when body=false. Default 3. Max 5. Useful for multi-line function signatures."},
+			"sig_lines":       {Type: "integer", Description: "Lines of signature when body=false. Default 1 (first line only). Use 2-3 for multi-line signatures."},
 			"compact":         {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
 			"receiver":        {Type: "string", Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). Applies to Go, Rust, Python classes."},
 			"group_by_file":   {Type: "boolean", Description: "Group results under file headers instead of a flat list. Format: '### path/to/file.go (N matches)' then results. Reduces navigation overhead in large multi-file scans."},
@@ -87,7 +87,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		a.Include = "*"
 	}
 	if a.SigLines <= 0 {
-		a.SigLines = 3
+		a.SigLines = 1
 	}
 
 	pattern, err := CompilePattern(a.Pattern, a.CaseSensitive)
@@ -155,7 +155,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if compact {
 			fmt.Fprintf(&buf, "%d %ss %q", total, label, a.Pattern)
 		} else {
-			fmt.Fprintf(&buf, "%d %s(es) matching %q", total, label, a.Pattern)
+			fmt.Fprintf(&buf, "%d %ss matching %q", total, label, a.Pattern)
 		}
 		if total > a.MaxResults || a.Offset > 0 {
 			fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
@@ -190,6 +190,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 					fmt.Fprintf(&buf, "### %s (%d)\n", g.file, len(g.matches))
 				} else {
 					fmt.Fprintf(&buf, "\n### %s — %d matches\n", g.file, len(g.matches))
+				}
+				if !includeBody {
+					buf.WriteString("```\n")
 				}
 				for _, m := range g.matches {
 					if namesOnly {
@@ -226,16 +229,17 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 							}
 							body = SummarizeBody(body, sl)
 						}
-						fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
-						if compact {
-							buf.WriteString("\n")
-						} else {
-							buf.WriteString("\n")
-						}
+						fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(body, "\n"))
 					}
+				}
+				if !includeBody {
+					buf.WriteString("```\n")
 				}
 			}
 		} else {
+			if !includeBody {
+				buf.WriteString("```\n")
+			}
 			for _, m := range page {
 				rel := server.RelPath(m.File)
 				if namesOnly {
@@ -272,13 +276,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 						}
 						body = SummarizeBody(body, sl)
 					}
-					fmt.Fprintf(&buf, "```%s\n%s\n```", ext, strings.TrimRight(body, "\n"))
-					if compact {
-						buf.WriteString("\n")
-					} else {
-						buf.WriteString("\n")
-					}
+					fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(body, "\n"))
 				}
+			}
+			if !includeBody {
+				buf.WriteString("```\n")
 			}
 		} // end group_by_file else
 		if end < total {

@@ -162,7 +162,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	fmt.Fprintf(&buf, "%d symbol%s matching %q in %s:\n", len(matches), plural, a.Name, rel)
 
 	for _, m := range matches {
-		fmt.Fprintf(&buf, "%s:%d-%d: **[%s]** %s\n", rel, m.Line, m.EndLine, m.Kind, firstLine(m.Body, false))
+		fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, false))
 
 		body := m.Body
 		if a.Summary {

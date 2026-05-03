@@ -239,14 +239,16 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	} else {
 		fmt.Fprintf(&buf, "%d potentially dead symbols (of %d checked):\n\n", len(dead), checked)
 	}
+	buf.WriteString("```\n")
 	for _, d := range dead {
 		rel := server.RelPath(d.file)
 		kind := d.kind
 		if kind == "" {
 			kind = "?"
 		}
-		fmt.Fprintf(&buf, "- %s:%d [%s] %s\n", rel, d.line, kind, d.name)
+		fmt.Fprintf(&buf, "%s:%d [%s] %s\n", rel, d.line, kind, d.name)
 	}
+	buf.WriteString("```\n")
 
 	if len(rawCandidates) == a.MaxSymbols {
 		fmt.Fprintf(&buf, "\n(capped at %d symbols — increase max_symbols for full scan)\n", a.MaxSymbols)

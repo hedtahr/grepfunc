@@ -57,19 +57,20 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		} else {
 			fmt.Fprintf(&buf, "%d files related to %s:\n", len(related), a.Path)
 		}
+		buf.WriteString("```\n")
 		for _, r := range related {
 			relPath := server.RelPath(r)
 			if compact {
-				fmt.Fprintf(&buf, "- `%s`\n", relPath)
+				fmt.Fprintf(&buf, "%s\n", relPath)
 			} else {
-				category := categorize(r, a.Path)
 				symStr := ""
 				if a.WithSymbols {
 					symStr = extractSymbols(r)
 				}
-				fmt.Fprintf(&buf, "- %s → `%s`%s\n", category, relPath, symStr)
+				fmt.Fprintf(&buf, "%s%s\n", relPath, symStr)
 			}
 		}
+		buf.WriteString("```\n")
 	}
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
