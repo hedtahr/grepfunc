@@ -48,6 +48,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("path is required (no previous path in session)")
 	}
 	a.Path = server.ResolvePath(a.Path)
+	if err := server.CheckBanned(a.Path); err != nil {
+		return nil, err
+	}
 	server.SetLastPath(a.Path)
 
 	// Check if path is a directory
