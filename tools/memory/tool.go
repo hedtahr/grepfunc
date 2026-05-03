@@ -153,10 +153,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			}, nil
 		}
 		var buf strings.Builder
-		fmt.Fprintf(&buf, "%d matches for %q:\n\n", len(matched), a.Search)
+		fmt.Fprintf(&buf, "%d matches for %q:\n```\n", len(matched), a.Search)
 		for _, e := range matched {
-			fmt.Fprintf(&buf, "**%s** → %s\n", e.Key, e.Value)
+			fmt.Fprintf(&buf, "%s → %s\n", e.Key, e.Value)
 		}
+		buf.WriteString("```")
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 		}, nil
@@ -206,13 +207,14 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	var buf strings.Builder
 	if a.Namespace != "" {
-		fmt.Fprintf(&buf, "## Project Memory (namespace: %s)\n\n", a.Namespace)
+		fmt.Fprintf(&buf, "Project Memory (namespace: %s)\n```\n", a.Namespace)
 	} else {
-		buf.WriteString("## Project Memory\n\n")
+		buf.WriteString("Project Memory\n```\n")
 	}
 	for _, e := range entries {
-		fmt.Fprintf(&buf, "**%s** → %s\n", e.Key, e.Value)
+		fmt.Fprintf(&buf, "%s → %s\n", e.Key, e.Value)
 	}
+	buf.WriteString("```")
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil

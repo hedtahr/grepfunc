@@ -184,9 +184,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	var sb strings.Builder
 	if total == 0 {
 		if compact {
-			sb.WriteString(fmt.Sprintf("0 matches %q\n", a.Pattern))
+			fmt.Fprintf(&sb, "0 matches %q\n", a.Pattern)
 		} else {
-			sb.WriteString(fmt.Sprintf("0 matches for %q\n", a.Pattern))
+			fmt.Fprintf(&sb, "0 matches for %q\n", a.Pattern)
 		}
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
@@ -198,12 +198,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		suffix = "+"
 	}
 	if compact {
-		sb.WriteString(fmt.Sprintf("%d%s matches %q", total, suffix, a.Pattern))
+		fmt.Fprintf(&sb, "%d%s matches %q", total, suffix, a.Pattern)
 	} else {
-		sb.WriteString(fmt.Sprintf("%d%s matches for %q", total, suffix, a.Pattern))
+		fmt.Fprintf(&sb, "%d%s matches for %q", total, suffix, a.Pattern)
 	}
 	if a.Offset > 0 || end < total {
-		sb.WriteString(fmt.Sprintf(" (showing %d\u2013%d)", start+1, end))
+		fmt.Fprintf(&sb, " (showing %d\u2013%d)", start+1, end)
 	}
 	sb.WriteByte('\n')
 	if !compact {
@@ -213,25 +213,25 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	renderWindow := func(w window) {
 		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(w.relPath)), ".")
 		if !a.GroupByFile {
-			label := w.relPath + ":" + fmt.Sprint(w.matchLine)
 			if w.scope != "" {
-				label += " [" + w.scope + "]"
+				fmt.Fprintf(&sb, "%s:%d [%s]:\n", w.relPath, w.matchLine, w.scope)
+			} else {
+				fmt.Fprintf(&sb, "%s:%d:\n", w.relPath, w.matchLine)
 			}
-			sb.WriteString(label + ":\n")
 		} else {
-			label := ":" + fmt.Sprint(w.matchLine)
 			if w.scope != "" {
-				label += " [" + w.scope + "]"
+				fmt.Fprintf(&sb, ":%d [%s]\n", w.matchLine, w.scope)
+			} else {
+				fmt.Fprintf(&sb, ":%d\n", w.matchLine)
 			}
-			sb.WriteString(label + "\n")
 		}
 		sb.WriteString("```" + ext + "\n")
 		for idx, line := range w.lines {
 			lineNum := w.start + idx + 1
 			if lineNum == w.matchLine {
-				sb.WriteString(fmt.Sprintf("> %d: %s\n", lineNum, line))
+				fmt.Fprintf(&sb, "> %d: %s\n", lineNum, line)
 			} else {
-				sb.WriteString(fmt.Sprintf("  %d: %s\n", lineNum, line))
+				fmt.Fprintf(&sb, "  %d: %s\n", lineNum, line)
 			}
 		}
 		sb.WriteString("```")
@@ -278,7 +278,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	if end < total {
-		sb.WriteString(fmt.Sprintf("%d more. Use offset=%d.\n", total-end, end))
+		fmt.Fprintf(&sb, "%d more. Use offset=%d.\n", total-end, end)
 	}
 
 	info, err2 := os.Stat(resolved)

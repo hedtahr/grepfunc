@@ -383,7 +383,24 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 			}
 			return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[FAIL] %d/%d edits: %s", successCount, len(results), strings.Join(errs, "; "))}}}, nil
 		}
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[OK] %d/%d edits applied to %s", successCount, len(results), path)}}}, nil
+		if !dryRun {
+			if err := atomicWrite(path, current); err != nil {
+				return &server.ToolCallResult{
+					Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[FAIL] write error: %v", err)}},
+					IsError: true,
+				}, nil
+			}
+			if !skipValidate {
+				if result := runValidate(path); result != "" {
+					return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[OK] %d/%d applied — validation: %s", successCount, len(results), result)}}}, nil
+				}
+			}
+		}
+		msg := fmt.Sprintf("[OK] %d/%d edits applied to %s", successCount, len(results), path)
+		if dryRun {
+			msg = fmt.Sprintf("[DRY RUN] %d/%d edits would apply to %s", successCount, len(results), path)
+		}
+		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: msg}}}, nil
 	}
 
 	anyChange := successCount > 0
@@ -504,30 +521,29 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
 	}
 
-	// atomic write via tmp + rename
-	tmpPath := path + ".tmp"
-	os.Remove(tmpPath)
-	if err := os.WriteFile(tmpPath, current, 0644); err != nil {
+	if err := atomicWrite(path, current); err != nil {
 		fmt.Fprintf(&buf, "\nWARNING: write failed: %v", err)
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 			IsError: true,
 		}, nil
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		// fallback: direct write
-		if err2 := os.WriteFile(path, current, 0644); err2 != nil {
-			fmt.Fprintf(&buf, "\nWARNING: write failed: %v", err2)
-			return &server.ToolCallResult{
-				Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
-				IsError: true,
-			}, nil
-		}
-	}
 	if result := runValidate(path); result != "" && !skipValidate {
 		buf.WriteString("\n\n\u26a0\ufe0f Validation: " + result)
 	}
 	return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
+}
+
+func atomicWrite(path string, content []byte) error {
+	tmpPath := path + ".tmp"
+	os.Remove(tmpPath)
+	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return os.WriteFile(path, content, 0644)
+	}
+	return nil
 }
 
 // #15: confidence tier annotation
