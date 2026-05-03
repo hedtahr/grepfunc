@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"mcp_patch_file/server"
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 var Tool = server.Tool{
@@ -24,11 +24,11 @@ var Tool = server.Tool{
 			"path":           {Type: "string", Description: "File to inspect. Relative to project root or absolute. Project root directory name prefix also accepted. Defaults to the last file operated on in this session."},
 			"filter":         {Type: "string", Description: "Which symbols to return: 'func' (functions/methods only), 'type' (structs/interfaces/enums only), or 'all' (default)."},
 			"count_only":     {Type: "boolean", Description: "If true, return only the count of symbols — no names, no lines. Cheapest check: 'is this file worth inspecting?'"},
-			"compact":       {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
-			"pattern":       {Type: "string", Description: "Regex to filter symbols by name or signature. E.g. '^Handle' for exported handlers, 'Error' for error types. Case-insensitive by default."},
+			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
+			"pattern":        {Type: "string", Description: "Regex to filter symbols by name or signature. E.g. '^Handle' for exported handlers, 'Error' for error types. Case-insensitive by default."},
 			"case_sensitive": {Type: "boolean", Description: "Make pattern filter case-sensitive. Default false."},
-			"include":       {Type: "string", Description: "Glob to filter files. Only used when path is a directory. E.g. '**/*.go'. Defaults to all source files."},
-			"group_by_file": {Type: "boolean", Description: "When path is a directory, group symbols under file headers. Auto-enabled when path is a directory."},
+			"include":        {Type: "string", Description: "Glob to filter files. Only used when path is a directory. E.g. '**/*.go'. Defaults to all source files."},
+			"group_by_file":  {Type: "boolean", Description: "When path is a directory, group symbols under file headers. Auto-enabled when path is a directory."},
 		},
 		Required: []string{},
 	},
@@ -50,8 +50,8 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		Compact       bool   `json:"compact"`
 		Pattern       string `json:"pattern"`
 		CaseSensitive bool   `json:"case_sensitive"`
-		Include      string `json:"include"`
-		GroupByFile  bool   `json:"group_by_file"`
+		Include       string `json:"include"`
+		GroupByFile   bool   `json:"group_by_file"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
@@ -95,7 +95,10 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	// Deduplicate by (file, line), then remove nested symbols
-	type fileLinePair struct{ file string; line int }
+	type fileLinePair struct {
+		file string
+		line int
+	}
 	seen := make(map[fileLinePair]bool)
 	unique := syms[:0]
 	for _, s := range syms {

@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"mcp_patch_file/server"
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 var Tool = server.Tool{

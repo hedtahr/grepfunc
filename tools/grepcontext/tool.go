@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mcp_patch_file/server"
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 var Tool = server.Tool{
@@ -30,7 +30,7 @@ var Tool = server.Tool{
 			"scope":          {Type: "boolean", Description: "Annotate each match with enclosing function/type name. Default false."},
 			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of one header per match. Format: '### path/file.go (N matches)'. Reduces noise for multi-file searches. Default false."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode."},
-			"token_budget":  {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited)."},
+			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited)."},
 		},
 		Required: []string{"pattern"},
 	},

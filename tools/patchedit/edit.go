@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"mcp_patch_file/server"
+	"github.com/hedtahr/grepfunc/server"
 )
 
 func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {

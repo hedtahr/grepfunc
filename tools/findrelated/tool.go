@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"mcp_patch_file/server"
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 var Tool = server.Tool{
@@ -301,6 +301,7 @@ func depthBetween(root, child string) int {
 	}
 	return len(strings.Split(rel, string(filepath.Separator)))
 }
+
 var matchAll = regexp.MustCompile(`\w`)
 
 func extractSymbols(filePath string) string {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 func TestHandle(t *testing.T) {

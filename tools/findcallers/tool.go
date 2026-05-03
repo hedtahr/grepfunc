@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strings"
 
-	"mcp_patch_file/server"
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 var Tool = server.Tool{
@@ -30,7 +30,7 @@ var Tool = server.Tool{
 			"receiver":       {Type: "string", Description: "Filter call sites to method calls on this receiver/variable name. E.g. 'receiver: \"s\"' finds 's.MethodName('. Useful to narrow results for common method names."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode (~20x fewer tokens). For quick scan of where a function is called."},
 			"scope":          {Type: "boolean", Description: "Annotate each call site with the enclosing function/method name. Default false."},
-			"token_budget":  {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only. No default (unlimited)."},
+			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only. No default (unlimited)."},
 		},
 		Required: []string{"name"},
 	},

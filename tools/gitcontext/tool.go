@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"mcp_patch_file/server"
+	"github.com/hedtahr/grepfunc/server"
 )
 
 var Tool = server.Tool{

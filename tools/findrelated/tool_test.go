@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mcp_patch_file/server"
+	"github.com/hedtahr/grepfunc/server"
 )
 
 func TestHandle(t *testing.T) {
@@ -110,7 +110,7 @@ func TestCategorize(t *testing.T) {
 func TestIsRelatedName(t *testing.T) {
 	tests := []struct {
 		name, entry string
-		want             bool
+		want        bool
 	}{
 		// Test patterns
 		{"user", "user_test.go", true},

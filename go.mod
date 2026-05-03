@@ -1,4 +1,4 @@
-module mcp_patch_file
+module github.com/hedtahr/grepfunc
 
 go 1.26.2
 

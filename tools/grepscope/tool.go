@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"mcp_patch_file/server"
-	"mcp_patch_file/tools/grepfunc"
+	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
 var Tool = server.Tool{
@@ -24,7 +24,7 @@ var Tool = server.Tool{
 			"case_sensitive": {Type: "boolean", Description: "Default false."},
 			"context_lines":  {Type: "integer", Description: "Lines of context around each match. Default 2, max 8."},
 			"kind":           {Type: "string", Description: "Symbol kind: 'func', 'type', or 'any' (default)."},
-			"token_budget":  {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line:match only. No default (unlimited)."},
+			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line:match only. No default (unlimited)."},
 		},
 		Required: []string{"pattern", "symbol"},
 	},
