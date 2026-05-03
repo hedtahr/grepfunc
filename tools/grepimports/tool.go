@@ -83,6 +83,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	// File mode: list all imports in one file
 	if a.File != "" {
 		a.File = server.ResolvePath(a.File)
+		if err := server.CheckBounds(a.File); err != nil {
+			return nil, err
+		}
 		if err := server.CheckBanned(a.File); err != nil {
 			return nil, err
 		}

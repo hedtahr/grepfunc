@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +18,15 @@ type Server struct {
 	version     string
 	tools       []ToolEntry
 	projectRoot string
+
+	writeMu   sync.Mutex
+	pending   sync.Map // string(id) → chan rawResponse
+	nextReqID atomic.Int64
+}
+
+type rawResponse struct {
+	Result json.RawMessage
+	Err    *RPCError
 }
 
 // ProjectRoot returns the project root discovered during initialize, or "." if unknown.
@@ -63,6 +73,24 @@ func (s *Server) Run() {
 		if len(line) == 0 {
 			continue
 		}
+		// Peek to detect client responses vs requests.
+		var env struct {
+			ID     any             `json:"id"`
+			Method string          `json:"method"`
+			Result json.RawMessage `json:"result"`
+			Error  *RPCError       `json:"error"`
+		}
+		if err := json.Unmarshal(line, &env); err != nil {
+			s.sendError(nil, -32700, "Parse error", err.Error())
+			continue
+		}
+		// Route client response to pending channel (server-initiated request).
+		if env.Method == "" {
+			if ch, ok := s.pending.Load(fmt.Sprint(env.ID)); ok {
+				ch.(chan rawResponse) <- rawResponse{Result: env.Result, Err: env.Error}
+			}
+			continue
+		}
 		var req Request
 		if err := json.Unmarshal(line, &req); err != nil {
 			s.sendError(nil, -32700, "Parse error", err.Error())
@@ -70,8 +98,7 @@ func (s *Server) Run() {
 		}
 		resp := s.handle(req)
 		if resp != nil {
-			out, _ := json.Marshal(resp)
-			fmt.Println(string(out))
+			s.writeJSON(resp)
 		}
 	}
 
@@ -90,6 +117,9 @@ func (s *Server) handle(req Request) *Response {
 			Roots    []struct {
 				URI string `json:"uri"`
 			} `json:"roots"`
+			Capabilities struct {
+				Roots *json.RawMessage `json:"roots"`
+			} `json:"capabilities"`
 		}
 		if err := json.Unmarshal(req.Params, &initParams); err != nil {
 			fmt.Fprintf(os.Stderr, "[mcp] json.Unmarshal initialize: %v\n", err)
@@ -103,6 +133,7 @@ func (s *Server) handle(req Request) *Response {
 				for i, r := range initParams.Roots {
 					fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
 				}
+				fmt.Fprintf(f, "  caps.roots=%v\n", initParams.Capabilities.Roots != nil)
 				f.Close()
 			}
 		}
@@ -114,9 +145,11 @@ func (s *Server) handle(req Request) *Response {
 			root = initParams.Roots[0].URI
 		}
 		root = strings.TrimPrefix(root, "file://")
+		editorProvided := root != ""
 		if root == "" {
 			if r := os.Getenv("PROJECT_ROOT"); r != "" {
 				root = r
+				editorProvided = true
 			} else {
 				root, _ = os.Getwd()
 			}
@@ -127,7 +160,12 @@ func (s *Server) handle(req Request) *Response {
 		}
 		s.projectRoot = root
 		ProjectRoot = root
-		fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s\n", ProjectRoot)
+		if editorProvided {
+			projectRootLocked = true
+			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (locked from initialize)\n", ProjectRoot)
+		} else {
+			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (cwd fallback, not locked — will try roots/list)\n", ProjectRoot)
+		}
 		go persistProjectRoot(root)
 		go autoDiscover(root)
 		return &Response{
@@ -141,6 +179,13 @@ func (s *Server) handle(req Request) *Response {
 		}
 
 	case "notifications/initialized":
+		if !projectRootLocked {
+			go s.requestRoots()
+		}
+		return nil
+
+	case "notifications/roots/list_changed":
+		go s.requestRoots()
 		return nil
 
 	case "tools/list":
@@ -202,14 +247,69 @@ func (s *Server) handle(req Request) *Response {
 	}
 }
 
+func (s *Server) writeJSON(v any) {
+	out, _ := json.Marshal(v)
+	s.writeMu.Lock()
+	fmt.Println(string(out))
+	s.writeMu.Unlock()
+}
+
 func (s *Server) sendError(id any, code int, message string, data any) {
-	resp := Response{
+	s.writeJSON(Response{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error:   &RPCError{Code: code, Message: message, Data: data},
+	})
+}
+
+// sendToClient sends a server-initiated JSON-RPC request and awaits the response.
+func (s *Server) sendToClient(method string, params any) (json.RawMessage, error) {
+	id := fmt.Sprintf("__srv__%d", s.nextReqID.Add(1))
+	ch := make(chan rawResponse, 1)
+	s.pending.Store(id, ch)
+	defer s.pending.Delete(id)
+	s.writeJSON(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	select {
+	case r := <-ch:
+		if r.Err != nil {
+			return nil, fmt.Errorf("%s error %d: %s", method, r.Err.Code, r.Err.Message)
+		}
+		return r.Result, nil
+	case <-time.After(3 * time.Second):
+		return nil, fmt.Errorf("%s: timeout", method)
 	}
-	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+}
+
+// requestRoots requests the list of roots from the client and updates ProjectRoot.
+func (s *Server) requestRoots() {
+	result, err := s.sendToClient("roots/list", map[string]any{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[mcp] roots/list: %v\n", err)
+		return
+	}
+	var resp struct {
+		Roots []struct {
+			URI  string `json:"uri"`
+			Name string `json:"name"`
+		} `json:"roots"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil || len(resp.Roots) == 0 {
+		fmt.Fprintf(os.Stderr, "[mcp] roots/list: no roots\n")
+		return
+	}
+	root := strings.TrimPrefix(resp.Roots[0].URI, "file://")
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	if root == ProjectRoot && projectRootLocked {
+		return
+	}
+	s.projectRoot = root
+	ProjectRoot = root
+	projectRootLocked = true
+	fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (roots/list, locked)\n", ProjectRoot)
+	go persistProjectRoot(root)
+	go autoDiscover(root)
 }
 
 // ResolvePath resolves a tool path argument relative to the project root.
@@ -240,16 +340,45 @@ func CheckBanned(p string) error {
 	return nil
 }
 
+// CheckBounds returns an error if p is outside ProjectRoot.
+// No-op when root is not yet locked (unknown project root).
+func CheckBounds(p string) error {
+	if !projectRootLocked || ProjectRoot == "" {
+		return nil
+	}
+	clean := filepath.Clean(p) + string(filepath.Separator)
+	root := filepath.Clean(ProjectRoot) + string(filepath.Separator)
+	if !strings.HasPrefix(clean, root) {
+		return fmt.Errorf("access denied: path %q is outside project root", p)
+	}
+	return nil
+}
+
+var projectRootLocked bool
+
+// LockProjectRoot prevents further re-orientation of ProjectRoot.
+func LockProjectRoot() {
+	projectRootLocked = true
+}
+
 func ResolvePath(p string) string {
 	if p == "" || p == "." {
 		return ProjectRoot
 	}
 	if filepath.IsAbs(p) {
-		// Re-orient whenever path is outside current ProjectRoot (handles project switch).
-		cleanRoot := filepath.Clean(ProjectRoot)
-		if !strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
-			if root := FindProjectRoot(filepath.Dir(p)); root != "/" {
-				ProjectRoot = root
+		// If root not yet locked, try to orient to this path's project root.
+		if !projectRootLocked {
+			cleanRoot := filepath.Clean(ProjectRoot)
+			if ProjectRoot == "" || !strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
+				if root := FindProjectRoot(filepath.Dir(p)); root != "/" {
+					ProjectRoot = root
+					projectRootLocked = true
+				} else {
+					// No marker found — use parent dir as best-effort root but don't lock.
+					ProjectRoot = filepath.Dir(p)
+				}
+			} else {
+				projectRootLocked = true
 			}
 		}
 		return p

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
@@ -22,7 +23,7 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path":    {Type: "string", Description: "File path or glob pattern (e.g. 'tools/**/*.go'). Glob when contains * ? [. Defaults to last file in session."},
-			"reads":   {Type: "array", Description: "Per-file ranges: [{path, start_line?, end_line?}]. Max 10 entries, max 300 lines each."},
+			"reads":   {Type: "array", Description: "Per-file ranges: [{path, start_line?, end_line?}]. path may be a glob — each glob expands to matched files sharing the same range. Max 10 entries, max 20 total files."},
 			"lines":   {Type: "integer", Description: "Lines to read per file (mode 1 head / mode 3). Default 60, max 200."},
 			"start":   {Type: "integer", Description: "First line to read, 1-based (mode 1 range)."},
 			"end":     {Type: "integer", Description: "Last line to read, inclusive (mode 1 range)."},
@@ -75,6 +76,9 @@ func handleSingle(a args) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("path is required (no previous path in session)")
 	}
 	a.Path = server.ResolvePath(a.Path)
+	if err := server.CheckBounds(a.Path); err != nil {
+		return nil, err
+	}
 	if err := server.CheckBanned(a.Path); err != nil {
 		return nil, err
 	}
@@ -101,17 +105,88 @@ func handleSingle(a args) (*server.ToolCallResult, error) {
 
 func handleMulti(a args) (*server.ToolCallResult, error) {
 	const maxEntries = 10
+	const maxTotalFiles = 20
 	if len(a.Reads) > maxEntries {
 		a.Reads = a.Reads[:maxEntries]
 	}
-	var sb strings.Builder
+
+	// Expand entries in parallel (each glob does a WalkDir)
+	slots := make([][]readEntry, len(a.Reads))
+	var wg sync.WaitGroup
 	for i, e := range a.Reads {
+		wg.Add(1)
+		go func(i int, e readEntry) {
+			defer wg.Done()
+			if !isGlob(e.Path) {
+				slots[i] = []readEntry{e}
+				return
+			}
+			glob := e.Path
+			root := server.ProjectRoot
+			if filepath.IsAbs(glob) {
+				if rel, err := filepath.Rel(root, glob); err == nil && !strings.HasPrefix(rel, "..") {
+					glob = rel
+				}
+			}
+			var found []readEntry
+			_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					if d != nil && d.IsDir() {
+						base := d.Name()
+						if base == ".git" || base == "node_modules" || base == "vendor" || strings.HasPrefix(base, ".") {
+							return filepath.SkipDir
+						}
+					}
+					return err
+				}
+				if !d.Type().IsRegular() || server.IsBannedPath(path) {
+					return nil
+				}
+				rel, _ := filepath.Rel(root, path)
+				if !grepfunc.MatchGlob(glob, rel) {
+					return nil
+				}
+				if info, err2 := d.Info(); err2 != nil || info.Size() > 2*1024*1024 {
+					return nil
+				}
+				if grepfunc.IsBinaryExt(strings.ToLower(filepath.Ext(path))) {
+					return nil
+				}
+				found = append(found, readEntry{Path: path, StartLine: e.StartLine, EndLine: e.EndLine})
+				if len(found) >= maxTotalFiles {
+					return filepath.SkipAll
+				}
+				return nil
+			})
+			slots[i] = found
+		}(i, e)
+	}
+	wg.Wait()
+
+	// Flatten slots in order, cap total
+	var expanded []readEntry
+outer:
+	for _, slot := range slots {
+		for _, e := range slot {
+			expanded = append(expanded, e)
+			if len(expanded) >= maxTotalFiles {
+				break outer
+			}
+		}
+	}
+
+	var sb strings.Builder
+	for i, e := range expanded {
 		if i > 0 {
 			sb.WriteByte('\n')
 		}
 		e.Path = server.ResolvePath(e.Path)
+		if err := server.CheckBounds(e.Path); err != nil {
+			fmt.Fprintf(&sb, "%s\n[error: %v]\n", server.RelPath(e.Path), err)
+			continue
+		}
 		if err := server.CheckBanned(e.Path); err != nil {
-			fmt.Fprintf(&sb, "### %s\n[error: %v]\n", server.RelPath(e.Path), err)
+			fmt.Fprintf(&sb, "%s\n[error: %v]\n", server.RelPath(e.Path), err)
 			continue
 		}
 		renderEntry(&sb, e, a.Compact)
@@ -135,6 +210,13 @@ func handleGlob(a args) (*server.ToolCallResult, error) {
 
 	glob := a.Path
 	root := server.ProjectRoot
+
+	// If glob is absolute and inside root, make it relative so MatchGlob works against rel paths
+	if filepath.IsAbs(glob) {
+		if rel, err := filepath.Rel(root, glob); err == nil && !strings.HasPrefix(rel, "..") {
+			glob = rel
+		}
+	}
 
 	var matched []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -197,7 +279,7 @@ func renderEntry(sb *strings.Builder, e readEntry, compact bool) {
 	rel := server.RelPath(e.Path)
 	f, err := os.Open(e.Path)
 	if err != nil {
-		fmt.Fprintf(sb, "### %s\n[error: %v]\n", rel, err)
+		fmt.Fprintf(sb, "%s\n[error: %v]\n", rel, err)
 		return
 	}
 	defer f.Close()
@@ -223,7 +305,7 @@ func renderEntry(sb *strings.Builder, e readEntry, compact bool) {
 	if compact {
 		fmt.Fprintf(sb, "```%s\n", ext)
 	} else {
-		fmt.Fprintf(sb, "### %s (L%d-%d of %d)\n```%s\n", rel, start, actualEnd, total, ext)
+		fmt.Fprintf(sb, "%s (L%d-%d of %d)\n```%s\n", rel, start, actualEnd, total, ext)
 	}
 	for _, l := range lines {
 		sb.WriteString(l)

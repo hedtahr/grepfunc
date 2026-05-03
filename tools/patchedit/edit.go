@@ -22,6 +22,9 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("path is required")
 	}
 	args.Path = server.ResolvePath(args.Path)
+	if err := server.CheckBounds(args.Path); err != nil {
+		return nil, err
+	}
 	if err := server.CheckBanned(args.Path); err != nil {
 		return nil, err
 	}
@@ -30,6 +33,9 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 	// insert_file: read file and treat as insert op
 	if args.InsertFile != "" {
 		insertPath := server.ResolvePath(args.InsertFile)
+		if err := server.CheckBounds(insertPath); err != nil {
+			return nil, err
+		}
 		if err := server.CheckBanned(insertPath); err != nil {
 			return nil, err
 		}
@@ -196,7 +202,8 @@ func runValidate(path string) string {
 	var cmd *exec.Cmd
 	switch ext {
 	case ".go":
-		cmd = exec.Command("go", "vet", path)
+		cmd = exec.Command("go", "vet", ".")
+		cmd.Dir = filepath.Dir(path)
 	case ".rs":
 		cmd = exec.Command("rustc", "--edition", "2021", "--emit=metadata", path)
 	case ".py":
