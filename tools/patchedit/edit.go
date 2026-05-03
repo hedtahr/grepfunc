@@ -36,9 +36,7 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 			return nil, fmt.Errorf("failed to read insert_file: %v", err)
 		}
 		line := args.InsertLine
-		if line < 1 {
-			line = 1
-		}
+		line = max(line, 1)
 		args.Inserts = append(args.Inserts, InsertOp{
 			Line: line,
 			Text: string(data),
@@ -208,9 +206,10 @@ func handleUndo(path string) (*server.ToolCallResult, error) {
 			continue
 		}
 		// Shift remaining backups down
-		if suffix == ".1" {
+		switch suffix {
+		case ".1":
 			os.Rename(bp+".2", bp+".1")
-		} else if suffix == ".2" {
+		case ".2":
 			os.Rename(bp+".2", bp+".1")
 			os.Rename(bp+".3", bp+".2")
 		}
@@ -226,7 +225,7 @@ func handleUndo(path string) (*server.ToolCallResult, error) {
 	return nil, fmt.Errorf("no backup found for %s", path)
 }
 
-func runValidate(path string, content []byte) string {
+func runValidate(path string) string {
 	ext := filepath.Ext(path)
 	var cmd *exec.Cmd
 	switch ext {
@@ -353,9 +352,7 @@ func findAndReplace(content []byte, op EditOp, index int) editResult {
 func extractContext(content []byte, loc MatchLoc, radius int) string {
 	lines := strings.Split(string(content), "\n")
 	start := loc.LineStart - 1 - radius
-	if start < 0 {
-		start = 0
-	}
+	start = max(start, 0)
 	end := loc.LineEnd - 1 + radius
 	if end >= len(lines) {
 		end = len(lines) - 1
@@ -570,7 +567,7 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 			}, nil
 		}
 	}
-	if result := runValidate(path, current); result != "" && !skipValidate {
+	if result := runValidate(path); result != "" && !skipValidate {
 		buf.WriteString("\n\n\u26a0\ufe0f Validation: " + result)
 	}
 	return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil

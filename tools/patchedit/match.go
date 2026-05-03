@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 func findAllMatches(content []byte, oldText string) []MatchLoc {
@@ -70,6 +71,19 @@ func wsFuzzyMatch(content []byte, oldText string, lt []int) []MatchLoc {
 		return nil
 	}
 
+	// Build byte→rune index map: normBuf.WriteRune writes multi-byte UTF-8,
+	// but origForNorm has one entry per rune. strings.Index returns byte positions.
+	byteToRune := make([]int, len(normContent))
+	ri := 0
+	for bi := 0; bi < len(normContent); {
+		_, sz := utf8.DecodeRuneInString(normContent[bi:])
+		for j := range sz {
+			byteToRune[bi+j] = ri
+		}
+		bi += sz
+		ri++
+	}
+
 	origStr := string(content)
 
 	var locs []MatchLoc
@@ -80,8 +94,12 @@ func wsFuzzyMatch(content []byte, oldText string, lt []int) []MatchLoc {
 			break
 		}
 		abs := off + idx
-		origOfs := origForNorm[abs]
-		origEnd := mapNormToOrigCached(normContent, origForNorm, abs+len(normOld))
+		origOfs := origForNorm[byteToRune[abs]]
+		endByte := abs + len(normOld) - 1
+		if endByte >= len(byteToRune) {
+			endByte = len(byteToRune) - 1
+		}
+		origEnd := origForNorm[byteToRune[endByte]]
 		if origEnd < len(origStr) {
 			origEnd++ // exclusive end byte
 		} else {
@@ -175,7 +193,7 @@ func subFuzzyMatch(content []byte, oldText string, lt []int) []MatchLoc {
 
 	// Fast heuristic for long old_text: use longest non-empty trimmed line
 	if len(oldText) > 200 {
-		for _, line := range strings.Split(oldText, "\n") {
+		for line := range strings.SplitSeq(oldText, "\n") {
 			t := strings.TrimSpace(line)
 			if len(t) > len(longest) && bytes.Contains(content, []byte(t)) {
 				longest = t
@@ -231,28 +249,6 @@ func lineOffsetsToLines(t []int, start, end int) (int, int) {
 	return ls, le + 1
 }
 
-func mapNormToOrigCached(normContent string, origForNorm []int, normIdx int) int {
-	if normIdx <= 0 {
-		return 0
-	}
-	if normIdx-1 < len(origForNorm) {
-		return origForNorm[normIdx-1]
-	}
-	return origForNorm[len(origForNorm)-1]
-}
-
-func mapNormToOrig(s string, collapse func(string) string, normIdx int) int {
-	if normIdx <= 0 {
-		return 0
-	}
-	for i := range s {
-		if len(collapse(s[:i+1])) >= normIdx {
-			return i
-		}
-	}
-	return len(s)
-}
-
 type nearestMatch struct {
 	Line    int
 	Preview string
@@ -261,7 +257,7 @@ type nearestMatch struct {
 func findNearest(content []byte, oldText string) nearestMatch {
 	searchText := oldText
 	if strings.Contains(oldText, "\n") {
-		for _, l := range strings.Split(oldText, "\n") {
+		for l := range strings.SplitSeq(oldText, "\n") {
 			t := strings.TrimSpace(l)
 			if t != "" {
 				searchText = t

@@ -234,7 +234,7 @@ func processBatchFile(path string, a batchArgs) *fileResult {
 		os.WriteFile(bp, original, 0644)
 		os.WriteFile(path, current, 0644)
 		if !a.SkipValidate {
-			if warn := runValidate(path, current); warn != "" {
+			if warn := runValidate(path); warn != "" {
 				fr.failures = append(fr.failures, "validate: "+warn)
 			}
 		}

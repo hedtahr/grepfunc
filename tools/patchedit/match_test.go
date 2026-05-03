@@ -120,6 +120,10 @@ func TestWsFuzzyEndOffset(t *testing.T) {
 	if loc.EndOffset != loc.Offset+len(matched) {
 		t.Errorf("EndOffset inconsistent: %d != %d+%d", loc.EndOffset, loc.Offset, len(matched))
 	}
+	// Verify matched region starts with the right content (not shifted by 1)
+	if !strings.HasPrefix(matched, "func Foo") {
+		t.Errorf("matched region should start with 'func Foo', got %q", matched[:min(len(matched), 20)])
+	}
 	if int(loc.EndOffset) >= len(file) || file[loc.EndOffset] != '\n' {
 		t.Errorf("byte after EndOffset should be newline, got %q", file[loc.EndOffset:])
 	}
@@ -134,5 +138,37 @@ func TestWsFuzzyEndOffset(t *testing.T) {
 	}
 	if !strings.Contains(result, "func Bar") {
 		t.Error("func Bar missing after replacement")
+	}
+}
+
+func TestWsFuzzyTrailingSpace(t *testing.T) {
+	// Regression: TrimSpace was dropping origForNorm from front instead of back,
+	// shifting all offsets by 1 and corrupting files.
+	file := []byte("  func foo() {\n    return nil\n  }\n")
+	oldText := "  func foo() {\n    return nil\n  }"
+	locs := wsFuzzyMatch(file, oldText, buildLineTable(file))
+	if len(locs) != 1 {
+		t.Fatalf("got %d matches, want 1", len(locs))
+	}
+	loc := locs[0]
+	matched := string(file[loc.Offset:loc.EndOffset])
+	t.Logf("matched region: %q", matched)
+	t.Logf("Offset=%d EndOffset=%d", loc.Offset, loc.EndOffset)
+	// Critical: matched region must start with the actual content, not shifted
+	if !strings.HasPrefix(strings.TrimSpace(matched), "func foo()") {
+		t.Errorf("matched region corrupt, got %q", matched)
+	}
+	// Apply replacement and verify no leftovers
+	newText := "// replaced\n"
+	var out []byte
+	out = append(out, file[:loc.Offset]...)
+	out = append(out, []byte(newText)...)
+	out = append(out, file[loc.EndOffset:]...)
+	result := string(out)
+	if strings.Contains(result, "return nil") {
+		t.Errorf("old text remnants in output: %q", result)
+	}
+	if !strings.Contains(result, "// replaced") {
+		t.Errorf("new text not found: %q", result)
 	}
 }

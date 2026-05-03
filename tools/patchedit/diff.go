@@ -78,7 +78,7 @@ func unifiedDiff(old, new []byte, path string, diffCtx int) string {
 
 func commonPrefixLines(a, b []string) int {
 	n := min(len(a), len(b))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if a[i] != b[i] {
 			return i
 		}
@@ -89,7 +89,7 @@ func commonPrefixLines(a, b []string) int {
 func commonSuffixLines(a, b []string) int {
 	la, lb := len(a), len(b)
 	n := min(la, lb)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if a[la-1-i] != b[lb-1-i] {
 			return i
 		}
