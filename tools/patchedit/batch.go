@@ -57,6 +57,13 @@ func BatchHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
 	}
+	// default fail_fast=true (safe: don't partially edit files)
+	var rawMap map[string]any
+	if json.Unmarshal(raw, &rawMap) == nil {
+		if _, ok := rawMap["fail_fast"]; !ok {
+			a.FailFast = true
+		}
+	}
 	if a.Glob == "" {
 		return nil, fmt.Errorf("glob is required")
 	}
@@ -197,15 +204,13 @@ func processBatchFile(path string, a batchArgs) *fileResult {
 
 	fr := &fileResult{rel: server.RelPath(path), total: len(a.Edits)}
 
-	anyFail := false
 	for _, r := range results {
 		if !r.Success {
 			fr.failures = append(fr.failures, fmt.Sprintf("edit %d: %s", r.Index, r.Error))
-			anyFail = true
 		}
 	}
 
-	if anyFail {
+	if len(fr.failures) > 0 && a.FailFast {
 		fr.skipped = true
 		return fr
 	}
@@ -243,7 +248,10 @@ func processBatchFile(path string, a batchArgs) *fileResult {
 	}
 
 	if !a.DryRun {
-		os.WriteFile(path, current, 0644)
+		if err := atomicWrite(path, current); err != nil {
+			fr.failures = append(fr.failures, fmt.Sprintf("write error: %v", err))
+			return fr
+		}
 		if !a.SkipValidate {
 			if warn := runValidate(path); warn != "" {
 				fr.failures = append(fr.failures, "validate: "+warn)
