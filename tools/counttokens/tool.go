@@ -43,6 +43,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("path is required")
 	}
 	a.Path = server.ResolvePath(a.Path)
+	if err := server.CheckBanned(a.Path); err != nil {
+		return nil, err
+	}
 
 	data, err := os.ReadFile(a.Path)
 	if err != nil {

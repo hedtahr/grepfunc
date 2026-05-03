@@ -82,7 +82,7 @@ func BatchHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() {
+		if !d.Type().IsRegular() || server.IsBannedPath(path) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)

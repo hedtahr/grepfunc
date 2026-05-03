@@ -126,7 +126,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			if compact {
 				fmt.Fprintf(&buf, "%d symbols %q:\n", len(results), a.Name)
 			} else {
-				fmt.Fprintf(&buf, "%d symbol(s) matching %q:\n\n", len(results), a.Name)
+				fmt.Fprintf(&buf, "%d symbols %q:\n", len(results), a.Name)
 			}
 		}
 		for _, m := range results {
@@ -139,7 +139,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			if ext == "" {
 				ext = "go"
 			}
-			fmt.Fprintf(&buf, "%s:%d-%d: **%s**\n", rel, m.Line, m.EndLine, m.Name)
+			fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, m.Name)
 			if a.Body {
 				body := m.Body
 				if a.Summary {
@@ -159,7 +159,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			if compact {
 				buf.WriteByte('\n')
 			} else {
-				buf.WriteString("\n\n")
+				buf.WriteByte('\n')
 			}
 		}
 		return buf.String()

@@ -117,10 +117,7 @@ func (s *Server) handle(req Request) *Response {
 			if r := os.Getenv("PROJECT_ROOT"); r != "" {
 				root = r
 			} else {
-				root = detectZedWorkspace()
-				if root == "" {
-					root, _ = os.Getwd()
-				}
+				root, _ = os.Getwd()
 			}
 		}
 		// normalize away symlinks (macOS /Users → /private/Users)
@@ -217,6 +214,31 @@ func (s *Server) sendError(id any, code int, message string, data any) {
 // ResolvePath resolves a tool path argument relative to the project root.
 // Accepts: absolute paths, paths relative to project root, and paths prefixed
 // with the project root's base name (Zed convention: "myproject/src/foo.go").
+// IsBannedPath reports whether p is a protected secret file.
+func IsBannedPath(p string) bool {
+	base := filepath.Base(p)
+	if base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasPrefix(base, ".env_") {
+		return true
+	}
+	switch base {
+	case ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "credentials":
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".pem", ".key", ".p12", ".pfx":
+		return true
+	}
+	return false
+}
+
+// CheckBanned returns an error if p is a banned path.
+func CheckBanned(p string) error {
+	if IsBannedPath(p) {
+		return fmt.Errorf("access denied: %q is a protected secret file", filepath.Base(p))
+	}
+	return nil
+}
+
 func ResolvePath(p string) string {
 	if p == "" || p == "." {
 		return ProjectRoot
@@ -383,28 +405,4 @@ func autoDiscover(root string) {
 	os.MkdirAll(filepath.Dir(memPath), 0755)
 	out, _ := json.MarshalIndent(s, "", "  ")
 	os.WriteFile(memPath, out, 0644)
-}
-
-// detectZedWorkspace queries Zed's SQLite DB for the most recently active workspace.
-func detectZedWorkspace() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	dbPath := filepath.Join(home, "Library", "Application Support", "Zed", "db", "0-stable", "db.sqlite")
-	if _, err := os.Stat(dbPath); err != nil {
-		return ""
-	}
-	out, err := exec.Command("sqlite3", dbPath,
-		"SELECT paths FROM workspaces ORDER BY timestamp DESC LIMIT 1;",
-	).Output()
-	if err != nil {
-		return ""
-	}
-	// paths may be pipe-separated for multi-root workspaces; take first
-	path := strings.TrimSpace(strings.SplitN(string(out), "|", 2)[0])
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return path
-	}
-	return ""
 }

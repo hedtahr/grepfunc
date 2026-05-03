@@ -83,6 +83,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	// File mode: list all imports in one file
 	if a.File != "" {
 		a.File = server.ResolvePath(a.File)
+		if err := server.CheckBanned(a.File); err != nil {
+			return nil, err
+		}
 		server.SetLastPath(a.File)
 		data, err := os.ReadFile(a.File)
 		if err != nil {
@@ -124,7 +127,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() {
+		if !d.Type().IsRegular() || server.IsBannedPath(path) {
 			return nil
 		}
 		rel, _ := filepath.Rel(a.Path, path)

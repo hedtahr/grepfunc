@@ -22,11 +22,17 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("path is required")
 	}
 	args.Path = server.ResolvePath(args.Path)
+	if err := server.CheckBanned(args.Path); err != nil {
+		return nil, err
+	}
 	server.SetLastPath(args.Path)
 
 	// insert_file: read file and treat as insert op
 	if args.InsertFile != "" {
 		insertPath := server.ResolvePath(args.InsertFile)
+		if err := server.CheckBanned(insertPath); err != nil {
+			return nil, err
+		}
 		data, err := os.ReadFile(insertPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read insert_file: %v", err)

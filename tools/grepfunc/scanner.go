@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/hedtahr/grepfunc/server"
 )
 
 // CompilePattern wraps a user pattern into a regex.
@@ -36,8 +38,7 @@ func Search(root, glob string, pattern *regexp.Regexp, max int, sigFn func([]byt
 			return nil
 		}
 
-		// Skip non-regular files (symlinks, devices, etc.)
-		if !d.Type().IsRegular() {
+		if !d.Type().IsRegular() || server.IsBannedPath(path) {
 			return nil
 		}
 
