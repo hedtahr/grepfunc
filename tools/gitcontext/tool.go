@@ -73,7 +73,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	if log != "" {
 		if a.Compact {
-			fmt.Fprintf(&buf, "log:\n%s\n", indent(log, "  "))
+			fmt.Fprintf(&buf, "log:\n```\n%s\n```\n", log)
 		} else {
 			fmt.Fprintf(&buf, "\n**Recent commits:**\n```\n%s\n```\n", log)
 		}
@@ -81,7 +81,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	if status != "" {
 		if a.Compact {
-			fmt.Fprintf(&buf, "status:\n%s\n", indent(status, "  "))
+			fmt.Fprintf(&buf, "status:\n```\n%s\n```\n", status)
 		} else {
 			fmt.Fprintf(&buf, "\n**Status:**\n```\n%s\n```\n", status)
 		}
@@ -92,7 +92,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	diffStat := run("diff", "--stat")
 	if diffStat != "" {
 		if a.Compact {
-			fmt.Fprintf(&buf, "diff:\n%s\n", indent(diffStat, "  "))
+			fmt.Fprintf(&buf, "diff:\n```\n%s\n```\n", diffStat)
 		} else {
 			fmt.Fprintf(&buf, "\n**Unstaged diff:**\n```\n%s\n```\n", diffStat)
 		}
@@ -101,12 +101,4 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil
-}
-
-func indent(s, prefix string) string {
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = prefix + l
-	}
-	return strings.Join(lines, "\n")
 }

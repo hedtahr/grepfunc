@@ -30,7 +30,7 @@ var Tool = server.Tool{
 			"sig_lines":       {Type: "integer", Description: "Lines of signature when body=false. Default 1 (first line only). Use 2-3 for multi-line signatures."},
 			"compact":         {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
 			"receiver":        {Type: "string", Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). Applies to Go, Rust, Python classes."},
-			"group_by_file":   {Type: "boolean", Description: "Group results under file headers instead of a flat list. Format: '### path/to/file.go (N matches)' then results. Reduces navigation overhead in large multi-file scans."},
+			"group_by_file":   {Type: "boolean", Description: "Group results under file headers instead of a flat list. Reduces navigation overhead in large multi-file scans."},
 			"token_budget":    {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only/summary mode. No default (unlimited)."},
 			"exclude_pattern": {Type: "string", Description: "Regex to exclude matching results. Filters on body and name."},
 		},
@@ -187,9 +187,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		if a.GroupByFile {
 			for _, g := range groupResults(page) {
 				if compact {
-					fmt.Fprintf(&buf, "### %s (%d)\n", g.file, len(g.matches))
+					fmt.Fprintf(&buf, "%s (%d)\n", g.file, len(g.matches))
 				} else {
-					fmt.Fprintf(&buf, "\n### %s — %d matches\n", g.file, len(g.matches))
+					fmt.Fprintf(&buf, "\n%s — %d matches\n", g.file, len(g.matches))
 				}
 				if !includeBody {
 					buf.WriteString("```\n")

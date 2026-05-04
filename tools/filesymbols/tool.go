@@ -170,7 +170,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 		for _, fr := range fileOrder {
 			group := byFile[fr]
-			fmt.Fprintf(&buf, "\n### %s (%d)\n```\n", fr, len(group))
+			fmt.Fprintf(&buf, "\n%s (%d)\n```\n", fr, len(group))
 			for _, s := range group {
 				fmt.Fprintf(&buf, "  L%-4d %-5s %s\n", s.line, s.kind, util.TrimKind(s.sig))
 			}
@@ -224,4 +224,3 @@ func removeNested(syms []sym) []sym {
 	}
 	return out
 }
-

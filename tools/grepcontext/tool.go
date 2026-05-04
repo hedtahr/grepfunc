@@ -29,7 +29,7 @@ var Tool = server.Tool{
 			"offset":         {Type: "integer", Description: "Pagination offset (0-based)."},
 			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
 			"scope":          {Type: "boolean", Description: "Annotate each match with enclosing function/type name. Default false."},
-			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of one header per match. Format: '### path/file.go (N matches)'. Reduces noise for multi-file searches. Default false."},
+			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of one header per match. Reduces noise for multi-file searches. Default false."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode."},
 			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited)."},
 			"count_only":     {Type: "boolean", Description: "Return match counts per file only — no content. Zero content tokens."},
@@ -272,9 +272,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	if a.NamesOnly {
+		sb.WriteString("```\n")
 		for _, w := range page {
 			fmt.Fprintf(&sb, "%s:%d\n", w.relPath, w.matchLine)
 		}
+		sb.WriteString("```\n")
 	} else if a.GroupByFile {
 		type fileGroup struct {
 			relPath string
@@ -292,9 +294,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 		for _, g := range groups {
 			if compact {
-				fmt.Fprintf(&sb, "### %s (%d)\n", g.relPath, len(g.windows))
+				fmt.Fprintf(&sb, "%s (%d)\n", g.relPath, len(g.windows))
 			} else {
-				fmt.Fprintf(&sb, "\n### %s — %d matches\n", g.relPath, len(g.windows))
+				fmt.Fprintf(&sb, "\n%s — %d matches\n", g.relPath, len(g.windows))
 			}
 			for _, w := range g.windows {
 				renderWindow(w)
@@ -328,6 +330,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			fmt.Fprintf(&terse, " (showing %d\u2013%d)", start+1, end)
 		}
 		terse.WriteByte('\n')
+		terse.WriteString("```\n")
 		for _, w := range page {
 			rel := w.relPath
 			if w.scope != "" {
@@ -336,6 +339,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 				fmt.Fprintf(&terse, "%s:%d\n", rel, w.matchLine)
 			}
 		}
+		terse.WriteString("```\n")
 		if end < total {
 			fmt.Fprintf(&terse, "%d more. Use offset=%d.\n", total-end, end)
 		}

@@ -85,7 +85,7 @@ func handleSingle(a args) (*server.ToolCallResult, error) {
 	server.SetLastPath(a.Path)
 
 	if info, err := os.Stat(a.Path); err == nil && info.IsDir() {
-		return nil, fmt.Errorf("path is a directory; use glob mode or pkg_outline instead")
+		return nil, fmt.Errorf("path is a directory; use glob mode or file_stats/file_symbols instead")
 	}
 
 	var buf strings.Builder
