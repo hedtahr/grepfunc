@@ -625,7 +625,7 @@ func extractFuncName(sig string) string {
 		"export function ", "pub fn ", "async def ", "function ",
 		"protected ", "override ", "abstract ", "private ", "virtual ",
 		"static ", "async ", "export ", "const ", "func ", "def ",
-		"let ", "var ", "fn "}
+		"let ", "var ", "fn ", "type "}
 	for _, p := range prefixes {
 		sig = strings.TrimPrefix(sig, p)
 	}
@@ -641,7 +641,12 @@ func extractFuncName(sig string) string {
 	// Find the identifier before the first (
 	before, _, found := strings.Cut(sig, "(")
 	if !found {
-		return sig // fallback
+		// No parens — take the first word (for "RemoveType struct {" after type stripping)
+		parts := strings.Fields(sig)
+		if len(parts) > 0 {
+			return strings.TrimRight(parts[0], " \t\r\n{")
+		}
+		return sig
 	}
 	before = strings.TrimSpace(before)
 	if before == "" {

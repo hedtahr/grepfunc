@@ -6,10 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hedtahr/grepfunc/server"
 )
 
 func TestHandle(t *testing.T) {
 	tmp := t.TempDir()
+	origRoot := server.ProjectRoot
+	server.ProjectRoot = tmp
+	defer func() { server.ProjectRoot = origRoot }()
 
 	// Full-file: os.Stat for size, bufio.Scanner for line count.
 	fullPath := filepath.Join(tmp, "full.go")

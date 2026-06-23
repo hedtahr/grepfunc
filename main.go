@@ -5,6 +5,7 @@ import (
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/counttokens"
+	"github.com/hedtahr/grepfunc/tools/deletesymbol"
 
 	"github.com/hedtahr/grepfunc/tools/filestats"
 	"github.com/hedtahr/grepfunc/tools/filesymbols"
@@ -58,6 +59,7 @@ func main() {
 	s.Register(gitcontext.Tool, gitcontext.Handle)
 	s.Register(counttokens.Tool, counttokens.Handle)
 	s.Register(grepdead.Tool, grepdead.Handle)
+	s.Register(deletesymbol.Tool, deletesymbol.Handle)
 	s.Register(renamesymbol.Tool, renamesymbol.Handle)
 	s.Register(gitdiff.Tool, gitdiff.Handle)
 	s.Register(grepscope.Tool, grepscope.Handle)

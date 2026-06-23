@@ -54,6 +54,11 @@ const (
 // storePath returns the memory file path for a project directory. Overridable for tests.
 var storePath = func(projectDir string) (string, error) {
 	root := server.FindProjectRoot(projectDir)
+	if !filepath.IsAbs(root) {
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+	}
 	return filepath.Join(root, memoryDir, memoryFile), nil
 }
 

@@ -423,20 +423,17 @@ func ResolvePath(p string) string {
 	}
 	if filepath.IsAbs(p) {
 		lastDir = filepath.Dir(p)
-		// If root not yet locked, try to orient to this path's project root.
-		if !projectRootLocked {
-			cleanRoot := filepath.Clean(ProjectRoot)
-			if ProjectRoot == "" || !strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
-				if root := FindProjectRoot(filepath.Dir(p)); root != "/" {
-					ProjectRoot = root
-					projectRootLocked = true
-				} else {
-					// No marker found — use parent dir as best-effort root but don't lock.
-					ProjectRoot = filepath.Dir(p)
-				}
-			} else {
+		cleanRoot := filepath.Clean(ProjectRoot)
+		// If path is NOT under current ProjectRoot, try to re-orient.
+		if ProjectRoot == "" || !strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
+			if root := FindProjectRoot(filepath.Dir(p)); root != "/" {
+				ProjectRoot = root
 				projectRootLocked = true
+			} else if root == "/" && !projectRootLocked {
+				ProjectRoot = filepath.Dir(p)
 			}
+		} else {
+			projectRootLocked = true
 		}
 		return p
 	}
@@ -552,6 +549,9 @@ func FindProjectRoot(dir string) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
+			if cwd, err := os.Getwd(); err == nil {
+				return cwd
+			}
 			return dir
 		}
 		dir = parent
