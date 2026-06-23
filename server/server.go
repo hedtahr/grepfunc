@@ -35,8 +35,14 @@ var ProjectRoot = "."
 
 // LastPath is the last file path operated on. find_related defaults to it.
 var LastPath = ""
+var lastDir = ""
 
-func SetLastPath(p string) { LastPath = p }
+func SetLastPath(p string) {
+	LastPath = p
+	if p != "" {
+		lastDir = filepath.Dir(p)
+	}
+}
 
 // SessionCache is a cross-tool cache for expensive lookups (e.g., symbol bodies).
 var (
@@ -416,6 +422,7 @@ func ResolvePath(p string) string {
 		return ProjectRoot
 	}
 	if filepath.IsAbs(p) {
+		lastDir = filepath.Dir(p)
 		// If root not yet locked, try to orient to this path's project root.
 		if !projectRootLocked {
 			cleanRoot := filepath.Clean(ProjectRoot)
@@ -432,6 +439,13 @@ func ResolvePath(p string) string {
 			}
 		}
 		return p
+	}
+	// Try last-known directory from previous absolute path.
+	if lastDir != "" {
+		candidate := filepath.Join(lastDir, p)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 	// Strip project-root basename prefix if present.
 	// e.g. ProjectRoot=/Users/x/myproject, p=myproject/src/foo.go → /Users/x/myproject/src/foo.go

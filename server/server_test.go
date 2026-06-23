@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,6 +93,55 @@ func TestRootsListRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(string(result), testRoot) {
 		t.Errorf("expected %q in result, got %s", testRoot, result)
+	}
+}
+
+func TestResolvePathLastDir(t *testing.T) {
+	origRoot := ProjectRoot
+	origLocked := projectRootLocked
+	origLast := lastDir
+	ProjectRoot = "/tmp/prj"
+	projectRootLocked = true
+	defer func() { ProjectRoot = origRoot; projectRootLocked = origLocked; lastDir = origLast }()
+
+	tmp := t.TempDir()
+	sub := filepath.Join(tmp, "sub")
+	os.MkdirAll(sub, 0755)
+	os.WriteFile(filepath.Join(sub, "a.go"), []byte("package x"), 0644)
+	os.WriteFile(filepath.Join(tmp, "root.go"), []byte("package x"), 0644)
+
+	// 1. Absolute path: saves lastDir, returns as-is
+	got := ResolvePath(filepath.Join(sub, "a.go"))
+	if got != filepath.Join(sub, "a.go") {
+		t.Fatalf("abs: got %q", got)
+	}
+	if lastDir != sub {
+		t.Fatalf("lastDir after abs: got %q, want %q", lastDir, sub)
+	}
+
+	// 2. Relative path that exists inside lastDir → concat
+	got = ResolvePath("a.go")
+	if got != filepath.Join(sub, "a.go") {
+		t.Fatalf("relative hit: got %q", got)
+	}
+
+	// 3. Relative path NOT in lastDir → falls through to ProjectRoot
+	got = ResolvePath("root.go")
+	if got != filepath.Join(ProjectRoot, "root.go") {
+		t.Fatalf("relative miss: got %q, want %q", got, filepath.Join(ProjectRoot, "root.go"))
+	}
+
+	// 4. Subfolder relative path not in lastDir → falls through
+	got = ResolvePath("src/nope.go")
+	if got != filepath.Join(ProjectRoot, "src/nope.go") {
+		t.Fatalf("subfolder miss: got %q", got)
+	}
+
+	// 5. No lastDir → ProjectRoot
+	lastDir = ""
+	got = ResolvePath("any.go")
+	if got != filepath.Join(ProjectRoot, "any.go") {
+		t.Fatalf("no lastDir: got %q", got)
 	}
 }
 

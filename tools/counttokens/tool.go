@@ -1,6 +1,7 @@
 package counttokens
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -50,53 +51,76 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(a.Path)
+	fi, err := os.Stat(a.Path)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read file: %v", err)
+		return nil, fmt.Errorf("cannot stat: %v", err)
 	}
+	charCount := int(fi.Size())
+	totalLines := 0
+	rangeInfo := ""
+	rangeLines := 0
 
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	totalLines := len(lines)
-
-	var target []string
-	rangeDesc := ""
 	if a.StartLine > 0 || a.EndLine > 0 {
-		start := max(1, a.StartLine) - 1
-		end := totalLines
-		if a.EndLine > 0 {
-			end = min(totalLines, a.EndLine)
+		f, err := os.Open(a.Path)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open: %v", err)
 		}
-		if start > end {
-			start = 0
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		ln := 0
+		rngStart := max(1, a.StartLine)
+		rngEnd := a.EndLine
+		if rngEnd <= 0 {
+			rngEnd = 1<<31 - 1
 		}
-		target = lines[start:end]
-		rangeDesc = fmt.Sprintf(" (L%d–L%d)", start+1, end)
+		charCount = 0
+		for sc.Scan() {
+			ln++
+			if ln < rngStart {
+				continue
+			}
+			if ln > rngEnd {
+				break
+			}
+			charCount += len(sc.Bytes()) + 1
+			rangeLines++
+		}
+		totalLines = ln
+		if rngEnd > totalLines {
+			rngEnd = totalLines
+		}
+		rangeInfo = fmt.Sprintf(" (L%d\u2013L%d)", rngStart, rngEnd)
 	} else {
-		target = lines
+		f, err := os.Open(a.Path)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open: %v", err)
+		}
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			totalLines++
+		}
 	}
 
-	charCount := 0
-	for _, l := range target {
-		charCount += len(l) + 1
-	}
 	estTokens := charCount / 4
 
 	var buf strings.Builder
 	rel := server.RelPath(a.Path)
-	fmt.Fprintf(&buf, "%s%s\n```\n", rel, rangeDesc)
-	fmt.Fprintf(&buf, "Lines: %d", len(target))
-	if a.StartLine <= 0 && a.EndLine <= 0 {
-		fmt.Fprintf(&buf, " (of %d total)", totalLines)
+	fmt.Fprintf(&buf, "%s%s\n```\n", rel, rangeInfo)
+	if a.StartLine > 0 || a.EndLine > 0 {
+		fmt.Fprintf(&buf, "Lines: %d (of %d total)\n", rangeLines, totalLines)
+	} else {
+		fmt.Fprintf(&buf, "Lines: %d\n", totalLines)
 	}
-	fmt.Fprintf(&buf, "\nChars: %d\nEst. tokens: ~%d\n```\n", charCount, estTokens)
+	fmt.Fprintf(&buf, "Chars: %d\nEst. tokens: ~%d\n```\n", charCount, estTokens)
 
 	switch {
 	case estTokens > dangerThreshold:
-		fmt.Fprintf(&buf, "\n⛔ VERY LARGE — reading full file costs ~%d tokens. Use start_line/end_line ranges or file_symbols instead.\n", estTokens)
+		fmt.Fprintf(&buf, "\n\u26d4 VERY LARGE \u2014 reading full file costs ~%d tokens. Use start_line/end_line ranges or file_symbols instead.\n", estTokens)
 	case estTokens > warnThreshold:
-		fmt.Fprintf(&buf, "\n⚠️  Large file — consider reading in ranges (file_head start/end) to reduce token cost.\n")
+		fmt.Fprintf(&buf, "\n\u26a0\ufe0f  Large file \u2014 consider reading in ranges (file_head start/end) to reduce token cost.\n")
 	default:
-		fmt.Fprintf(&buf, "\n✓ Safe to read.\n")
+		fmt.Fprintf(&buf, "\n\u2713 Safe to read.\n")
 	}
 
 	return &server.ToolCallResult{

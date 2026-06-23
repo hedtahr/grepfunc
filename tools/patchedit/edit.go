@@ -204,8 +204,6 @@ func runValidate(path string) string {
 	case ".go":
 		cmd = exec.Command("go", "vet", ".")
 		cmd.Dir = filepath.Dir(path)
-	case ".rs":
-		cmd = exec.Command("rustc", "--edition", "2021", "--emit=metadata", path)
 	case ".py":
 		cmd = exec.Command("python3", "-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())", path)
 	default:

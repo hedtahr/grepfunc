@@ -20,7 +20,7 @@ var Tool = server.Tool{
 
 			"diff_context":      {Type: "integer", Description: "Lines of context around diff hunks. Default 3. Use 0 for minimal diff (changed lines only). Max 10."},
 			"create_if_missing": {Type: "boolean", Description: "If true and path does not exist, create an empty file before applying edits. Useful for new-file creation without switching to write mode."},
-			"skip_validate":     {Type: "boolean", Description: "If true, skip post-write validation (go vet / rustc / python ast). Reduces latency for multi-edit sequences."},
+			"skip_validate":     {Type: "boolean", Description: "If true, skip post-write validation (go vet / python ast). Reduces latency for multi-edit sequences."},
 			"append_text":       {Type: "string", Description: "Text to append to the end of the file. Applied after all edits/inserts. A newline separator is added automatically if the file doesn't end with one."},
 			"no_diff":           {Type: "boolean", Description: "If true, omit the diff block from the response. Shows only the edit summary line. Reduces token usage for confirmation-only workflows."},
 			"echo_lines":        {Type: "integer", Description: "Lines of context around first edit point in result echo. Default 3. Set 0 to disable (saves ~50 tokens). Eliminates a follow-up file_head call to verify the result."},
