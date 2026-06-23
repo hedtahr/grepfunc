@@ -97,10 +97,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	fetchMax := a.MaxResults
 	if a.Offset > 0 {
-		fetchMax = a.Offset + a.MaxResults
-		if fetchMax > 200 {
-			fetchMax = 200
-		}
+		fetchMax = min(a.Offset+a.MaxResults, 200)
 	}
 	var results, typeResults []FuncMatch
 	if a.IncludeTypes {
@@ -363,7 +360,7 @@ func SummarizeBody(body string, n int) string {
 	}
 	omitted := len(lines) - n*2
 	var buf strings.Builder
-	for i := 0; i < n; i++ {
+	for i := range n {
 		buf.WriteString(lines[i])
 		buf.WriteByte('\n')
 	}

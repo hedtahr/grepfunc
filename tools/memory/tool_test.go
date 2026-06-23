@@ -121,7 +121,7 @@ func TestLRUEviction(t *testing.T) {
 	defer func() { storePath = origPath }()
 
 	// Fill beyond maxEntries (50)
-	for i := 0; i < 55; i++ {
+	for i := range 55 {
 		saveKV(t, "k"+string(rune('a'+i%26))+string(rune('0'+i/26)), "v")
 	}
 
@@ -131,7 +131,7 @@ func TestLRUEviction(t *testing.T) {
 
 	// Should have at most 100 entries
 	count := 0
-	for _, l := range strings.Split(strings.TrimSpace(text), "\n") {
+	for l := range strings.SplitSeq(strings.TrimSpace(text), "\n") {
 		if strings.HasPrefix(l, "**") {
 			count++
 		}

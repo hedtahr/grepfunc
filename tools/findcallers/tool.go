@@ -258,10 +258,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 				ext = "txt"
 			}
 
-			windowStart := s.callIdx - a.ContextLines
-			if windowStart < 0 {
-				windowStart = 0
-			}
+			windowStart := max(s.callIdx-a.ContextLines, 0)
 
 			header := fmt.Sprintf("%s:%d", rel, callLineNum)
 			if s.scope != "" {

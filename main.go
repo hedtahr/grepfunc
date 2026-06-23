@@ -22,6 +22,7 @@ import (
 	"github.com/hedtahr/grepfunc/tools/grepscope"
 	"github.com/hedtahr/grepfunc/tools/grepstruct"
 	"github.com/hedtahr/grepfunc/tools/memory"
+	"github.com/hedtahr/grepfunc/tools/movesymbol"
 	"github.com/hedtahr/grepfunc/tools/multiread"
 	"github.com/hedtahr/grepfunc/tools/patchedit"
 
@@ -62,6 +63,7 @@ func main() {
 	s.Register(grepscope.Tool, grepscope.Handle)
 	s.Register(multiread.Tool, multiread.Handle)
 	s.Register(symbolat.Tool, symbolat.Handle)
+	s.Register(movesymbol.Tool, movesymbol.Handle)
 	s.Register(grepreplace.Tool, grepreplace.Handle)
 	s.Run()
 }

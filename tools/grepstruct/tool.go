@@ -75,10 +75,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	fetchMax := a.MaxResults
 	if a.Offset > 0 {
-		fetchMax = a.Offset + a.MaxResults
-		if fetchMax > 200 {
-			fetchMax = 200
-		}
+		fetchMax = min(a.Offset+a.MaxResults, 200)
 	}
 	results, err := grepfunc.Search(a.Path, a.Include, pattern, fetchMax, grepfunc.IsStructSig)
 	if err != nil {

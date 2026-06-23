@@ -145,10 +145,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		sort.Strings(names)
 		chunkSize := 30
 		for i := 0; i < len(names); i += chunkSize {
-			end := i + chunkSize
-			if end > len(names) {
-				end = len(names)
-			}
+			end := min(i+chunkSize, len(names))
 			chunk := names[i:end]
 			parts := make([]string, len(chunk))
 			for j, name := range chunk {

@@ -562,7 +562,7 @@ func TestCommentBlockInsideFunc(t *testing.T) {
 	lines := toLines([]byte(code))
 	b := mapBlockBoundaries(lines, IsFuncSig)
 
-	for i := 0; i < len(lines); i++ {
+	for i := range lines {
 		if got := b[i]; got != 0 {
 			t.Errorf("line %d: got %d, want 0 (block comment with braces)", i, got)
 		}

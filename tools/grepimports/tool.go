@@ -238,7 +238,7 @@ func parsePyImports(data []byte, filter string) []importEntry {
 				trimmed = trimmed[:strings.Index(trimmed, ")")]
 				inMultiline = false
 			}
-			for _, s := range strings.Split(trimmed, ",") {
+			for s := range strings.SplitSeq(trimmed, ",") {
 				s = strings.TrimSpace(s)
 				if before, _, found := strings.Cut(s, " as "); found {
 					s = strings.TrimSpace(before)
@@ -267,7 +267,7 @@ func parsePyImports(data []byte, filter string) []importEntry {
 				mlSyms = nil
 				after := raw[strings.LastIndex(raw, "(")+1:]
 				after = strings.TrimSpace(after)
-				for _, s := range strings.Split(after, ",") {
+				for s := range strings.SplitSeq(after, ",") {
 					s = strings.TrimSpace(s)
 					if before, _, found := strings.Cut(s, " as "); found {
 						s = strings.TrimSpace(before)
@@ -280,7 +280,7 @@ func parsePyImports(data []byte, filter string) []importEntry {
 			}
 			var syms []string
 			raw = strings.Trim(raw, "()")
-			for _, s := range strings.Split(raw, ",") {
+			for s := range strings.SplitSeq(raw, ",") {
 				s = strings.TrimSpace(s)
 				if before, _, found := strings.Cut(s, " as "); found {
 					s = strings.TrimSpace(before)
@@ -296,7 +296,7 @@ func parsePyImports(data []byte, filter string) []importEntry {
 			continue
 		}
 		if m := pyImport.FindStringSubmatch(line); m != nil {
-			for _, mod := range strings.Split(m[1], ",") {
+			for mod := range strings.SplitSeq(m[1], ",") {
 				mod = strings.TrimSpace(mod)
 				if before, _, found := strings.Cut(mod, " as "); found {
 					mod = strings.TrimSpace(before)
@@ -324,7 +324,7 @@ func parseJSImports(data []byte, filter string) []importEntry {
 				specifiers := m[1]
 				var syms []string
 				if bm := jsBraces.FindStringSubmatch(specifiers); bm != nil {
-					for _, s := range strings.Split(bm[1], ",") {
+					for s := range strings.SplitSeq(bm[1], ",") {
 						s = strings.TrimSpace(s)
 						if before, _, found := strings.Cut(s, " as "); found {
 							s = strings.TrimSpace(before)
@@ -375,11 +375,11 @@ func parseRustImports(data []byte, filter string) []importEntry {
 		if m := rustUse.FindStringSubmatch(line); m != nil {
 			raw := m[1]
 			if filter == "" || strings.Contains(raw, filter) {
-				if idx := strings.Index(raw, "::{"); idx >= 0 {
-					base := raw[:idx]
-					inner := strings.Trim(raw[idx+3:], "}")
+				if before, after, ok := strings.Cut(raw, "::{"); ok {
+					base := before
+					inner := strings.Trim(after, "}")
 					var syms []string
-					for _, s := range strings.Split(inner, ",") {
+					for s := range strings.SplitSeq(inner, ",") {
 						s = strings.TrimSpace(s)
 						if s != "" {
 							syms = append(syms, s)
