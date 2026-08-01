@@ -18,6 +18,7 @@ type Server struct {
 	version     string
 	tools       []ToolEntry
 	projectRoot string
+	stats       *toolStats
 
 	writeMu        sync.Mutex
 	pending        sync.Map // string(id) → chan rawResponse
@@ -64,7 +65,7 @@ func CacheGet(key string) (any, bool) {
 }
 
 func New(name, version string) *Server {
-	return &Server{name: name, version: version}
+	return &Server{name: name, version: version, stats: newToolStats()}
 }
 
 func (s *Server) Register(tool Tool, handler ToolHandler) {
@@ -276,9 +277,11 @@ func (s *Server) handle(req Request) *Response {
 			}
 		}
 
+		start := time.Now()
 		for _, te := range s.tools {
 			if te.Tool.Name == params.Name {
 				result, err := te.Handler(args)
+				s.stats.record(s.tools, params.Name, err != nil, time.Since(start), len(args))
 				if err != nil {
 					return &Response{JSONRPC: "2.0", ID: req.ID, Result: &ToolCallResult{
 						Content: []ToolCallContent{{Type: "text", Text: err.Error()}},
@@ -288,6 +291,7 @@ func (s *Server) handle(req Request) *Response {
 				return &Response{JSONRPC: "2.0", ID: req.ID, Result: result}
 			}
 		}
+		s.stats.record(s.tools, params.Name, true, time.Since(start), len(args))
 		return &Response{
 			JSONRPC: "2.0", ID: req.ID,
 			Result: &ToolCallResult{

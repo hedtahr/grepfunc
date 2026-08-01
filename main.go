@@ -26,6 +26,7 @@ import (
 
 	"github.com/hedtahr/grepfunc/tools/renamesymbol"
 	"github.com/hedtahr/grepfunc/tools/symbolat"
+	"github.com/hedtahr/grepfunc/tools/toolstats"
 )
 
 func main() {
@@ -59,5 +60,6 @@ func main() {
 	s.Register(symbolat.Tool, symbolat.Handle)
 	s.Register(movesymbol.Tool, movesymbol.Handle)
 	s.Register(grepreplace.Tool, grepreplace.Handle)
+	s.Register(toolstats.Tool, toolstats.Handle)
 	s.Run()
 }
