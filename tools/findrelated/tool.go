@@ -1,7 +1,9 @@
+// Package findrelated provides the find_related MCP tool: locate tests, mocks, and sibling files.
 package findrelated
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,73 +16,140 @@ import (
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
+// Tool is the find_related MCP tool definition.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "find_related",
-	Description: "Find files RELATED to a given file — tests, mocks, sibling implementations, config files. The fastest way to answer 'where's the test for this?' or 'what other files do I need to touch?' Stops you from guessing file names and wasting tokens on failed reads. Finds: *_test.*, *.test.*, *_mock.*, mock_*, *.spec.*, and same-named files in nearby directories.",
+	Name: "find_related",
+	Description: "Find files RELATED to a given file — tests, mocks, sibling implementations, config files. " +
+		"The fastest way to answer 'where's the test for this?' or 'what other files do I need to touch?' " +
+		"Stops you from guessing file names and wasting tokens on failed reads. " +
+		"Finds: *_test.*, *.test.*, *_mock.*, mock_*, *.spec.*, and same-named files in nearby directories.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":         {Type: "string", Description: "Source file to find related files for. Defaults to the last file operated on."},
-			"compact":      {Type: "boolean", Description: "Terse output: less whitespace, no category labels. Default false."},
-			"with_symbols": {Type: "boolean", Description: "If true, include top-level function and type names found in each related file. Saves the find_related → file_symbols two-step."},
+			"path": {
+				Type:        "string",
+				Description: "Source file to find related files for. Defaults to the last file operated on.",
+				Items:       nil,
+			},
+			"compact": {
+				Type:        "boolean",
+				Description: "Terse output: less whitespace, no category labels. Default false.",
+				Items:       nil,
+			},
+			"with_symbols": {
+				Type: "boolean",
+				Description: "If true, include top-level function and type names found in each related file. " +
+					"Saves the find_related → file_symbols two-step.",
+				Items: nil,
+			},
 		},
-		Required: []string{},
+		Required:             []string{},
+		AdditionalProperties: false,
 	},
 }
 
-func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a struct {
-		Path        string `json:"path"`
-		Compact     bool   `json:"compact"`
-		WithSymbols bool   `json:"with_symbols"`
-	}
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
-	}
-	if a.Path == "" {
-		a.Path = server.LastPath
-	}
-	if a.Path == "" {
-		return nil, fmt.Errorf("path is required (no previous path in session)")
-	}
-	a.Path = server.ResolvePath(a.Path)
-	if err := server.CheckBounds(a.Path); err != nil {
-		return nil, err
-	}
-	if err := server.CheckBanned(a.Path); err != nil {
-		return nil, err
-	}
-	server.SetLastPath(a.Path)
-	related := findRelated(a.Path)
+const (
+	pathKey     = "path"
+	typeText    = "text"
+	catTest     = "🧪 test"
+	catMock     = "🎭 mock/stub"
+	catSibling  = "📄 sibling"
+	catOtherDir = "📁 other dir"
 
-	compact := a.Compact
-	var buf strings.Builder
-	if len(related) == 0 {
-		fmt.Fprintf(&buf, "No related files found for %s.\n", a.Path)
-	} else {
-		if compact {
-			fmt.Fprintf(&buf, "%d related %s:\n", len(related), a.Path)
-		} else {
-			fmt.Fprintf(&buf, "%d files related to %s:\n", len(related), a.Path)
-		}
-		buf.WriteString("```\n")
-		for _, r := range related {
-			relPath := server.RelPath(r)
-			if compact {
-				fmt.Fprintf(&buf, "%s\n", relPath)
-			} else {
-				symStr := ""
-				if a.WithSymbols {
-					symStr = extractSymbols(r)
-				}
-				fmt.Fprintf(&buf, "%s%s\n", relPath, symStr)
-			}
-		}
-		buf.WriteString("```\n")
+	maxSiblings = 5
+	maxDepth    = 4
+	maxOtherDir = 3
+	maxResults  = 20
+	maxSymbols  = 5
+)
+
+var errPathRequired = errors.New("path is required (no previous path in session)")
+
+type args struct {
+	Path        string `json:"path"`
+	Compact     bool   `json:"compact"`
+	WithSymbols bool   `json:"with_symbols"`
+}
+
+// Handle serves the find_related MCP tool.
+func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
+	var input args
+
+	err := json.Unmarshal(raw, &input)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
+
+	if input.Path == "" {
+		input.Path = server.LastPath
+	}
+
+	if input.Path == "" {
+		return nil, errPathRequired
+	}
+
+	input.Path = server.ResolvePath(input.Path)
+
+	err = server.CheckBounds(input.Path)
+	if err != nil {
+		return nil, fmt.Errorf("check bounds: %w", err)
+	}
+
+	err = server.CheckBanned(input.Path)
+	if err != nil {
+		return nil, fmt.Errorf("check banned: %w", err)
+	}
+
+	server.SetLastPath(input.Path)
+	related := findRelated(input.Path)
+
+	return textResult(renderResults(related, input)), nil
+}
+
+// renderResults formats the related-file list, or a no-results notice.
+func renderResults(related []string, input args) string {
+	var buf strings.Builder
+
+	if len(related) == 0 {
+		fmt.Fprintf(&buf, "No related files found for %s.\n", input.Path)
+
+		return buf.String()
+	}
+
+	if input.Compact {
+		fmt.Fprintf(&buf, "%d related %s:\n", len(related), input.Path)
+	} else {
+		fmt.Fprintf(&buf, "%d files related to %s:\n", len(related), input.Path)
+	}
+
+	buf.WriteString("```\n")
+
+	for _, relatedPath := range related {
+		relPath := server.RelPath(relatedPath)
+		if input.Compact {
+			fmt.Fprintf(&buf, "%s\n", relPath)
+		} else {
+			symStr := ""
+			if input.WithSymbols {
+				symStr = extractSymbols(relatedPath)
+			}
+
+			fmt.Fprintf(&buf, "%s%s\n", relPath, symStr)
+		}
+	}
+
+	buf.WriteString("```\n")
+
+	return buf.String()
+}
+
+func textResult(text string) *server.ToolCallResult {
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
-	}, nil
+		Content: []server.ToolCallContent{{Type: typeText, Text: text}},
+		IsError: false,
+	}
 }
 
 func findRelated(filePath string) []string {
@@ -94,113 +163,171 @@ func findRelated(filePath string) []string {
 	}
 
 	seen := make(map[string]bool)
+
+	results := sameDirRelated(dir, name, base, seen)
+
+	// 1a. Same directory: siblings with same extension, capped and sorted by name similarity.
+	results = append(results, siblingCandidates(dir, filePath, name, ext, seen)...)
+
+	// 2. Walk up to find sibling directories with same-named files.
+	root := searchRoot(dir)
+	results = append(results, walkRelated(root, name, filePath, seen)...)
+
+	return prioritizeResults(results, filePath)
+}
+
+// sameDirRelated finds test/mock/spec files next to the source file.
+func sameDirRelated(dir, name, base string, seen map[string]bool) []string {
+	entries, err := filepath.Glob(filepath.Join(dir, "*"))
+	if err != nil {
+		return nil
+	}
+
 	var results []string
 
-	// 1. Same directory: test/mock/spec files
-	entries, err := filepath.Glob(filepath.Join(dir, "*"))
-	if err == nil {
-		for _, e := range entries {
-			entryBase := filepath.Base(e)
-			if entryBase == base {
-				continue
-			}
-			if isRelatedName(name, entryBase) {
-				if !seen[e] {
-					seen[e] = true
-					results = append(results, e)
-				}
-			}
+	for _, entry := range entries {
+		entryBase := filepath.Base(entry)
+		if entryBase == base {
+			continue
+		}
+
+		if isRelatedName(name, entryBase) && !seen[entry] {
+			seen[entry] = true
+
+			results = append(results, entry)
 		}
 	}
 
-	// 1a. Same directory: siblings with same extension, capped at 5, sorted by name similarity
-	if ext != "" {
-		allSibs, _ := filepath.Glob(filepath.Join(dir, "*"+ext))
-		var candSibs []string
-		for _, s := range allSibs {
-			if s == filePath || seen[s] {
-				continue
-			}
-			if !isRelatedName(name, filepath.Base(s)) {
-				candSibs = append(candSibs, s)
-			}
+	return results
+}
+
+// siblingCandidates finds same-extension files in the same directory, closest-name matches first.
+func siblingCandidates(dir, filePath, name, ext string, seen map[string]bool) []string {
+	if ext == "" {
+		return nil
+	}
+
+	allSibs, _ := filepath.Glob(filepath.Join(dir, "*"+ext))
+
+	candidates := make([]string, 0, len(allSibs))
+
+	for _, sib := range allSibs {
+		if sib == filePath || seen[sib] {
+			continue
 		}
-		sort.Slice(candSibs, func(i, j int) bool {
-			ni := strings.TrimSuffix(filepath.Base(candSibs[i]), ext)
-			nj := strings.TrimSuffix(filepath.Base(candSibs[j]), ext)
-			return commonPrefixLen(name, ni) > commonPrefixLen(name, nj)
-		})
-		if len(candSibs) > 5 {
-			candSibs = candSibs[:5]
-		}
-		for _, s := range candSibs {
-			seen[s] = true
-			results = append(results, s)
+
+		if !isRelatedName(name, filepath.Base(sib)) {
+			candidates = append(candidates, sib)
 		}
 	}
 
-	// 2. Walk up to find sibling directories with same-named files
-	projectRoot := server.FindProjectRoot(dir)
-	if projectRoot == "" {
-		projectRoot = dir
-	}
-	if filepath.Dir(projectRoot) == projectRoot {
-		projectRoot = dir
-	}
-	// Cap depth: if projectRoot is >4 levels above dir, fall back to dir
-	if depthBetween(projectRoot, dir) > 4 {
-		projectRoot = dir
+	sort.Slice(candidates, func(i, j int) bool {
+		first := strings.TrimSuffix(filepath.Base(candidates[i]), ext)
+		second := strings.TrimSuffix(filepath.Base(candidates[j]), ext)
+
+		return commonPrefixLen(name, first) > commonPrefixLen(name, second)
+	})
+
+	if len(candidates) > maxSiblings {
+		candidates = candidates[:maxSiblings]
 	}
 
-	filepath.WalkDir(projectRoot, func(p string, d fs.DirEntry, err error) error {
+	for _, sib := range candidates {
+		seen[sib] = true
+	}
+
+	return candidates
+}
+
+// searchRoot returns the project root to walk, falling back to the source dir
+// when no root is found or the walk would go too deep.
+func searchRoot(dir string) string {
+	root := server.FindProjectRoot(dir)
+	if root == "" {
+		root = dir
+	}
+
+	if filepath.Dir(root) == root {
+		root = dir
+	}
+
+	// Cap depth: if projectRoot is >4 levels above dir, fall back to dir.
+	if depthBetween(root, dir) > maxDepth {
+		root = dir
+	}
+
+	return root
+}
+
+// walkRelated walks the project root for same-named files in sibling directories.
+func walkRelated(root, name, filePath string, seen map[string]bool) []string {
+	var results []string
+
+	_ = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return filepath.SkipDir
 		}
-		if d.IsDir() {
-			base := d.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" ||
-				base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
+
+		if dirEntry.IsDir() {
+			if skipWalkDir(dirEntry.Name()) {
 				return filepath.SkipDir
 			}
-			// Skip dirs >4 levels deep from projectRoot
-			if depthBetween(projectRoot, p) > 4 {
+
+			// Skip dirs >4 levels deep from projectRoot.
+			if depthBetween(root, path) > maxDepth {
 				return filepath.SkipDir
 			}
+
 			return nil
 		}
-		if seen[p] || p == filePath {
+
+		if seen[path] || path == filePath {
 			return nil
 		}
-		entryBase := filepath.Base(p)
-		if isRelatedName(name, entryBase) {
-			if !seen[p] {
-				seen[p] = true
-				results = append(results, p)
-			}
+
+		if isRelatedName(name, filepath.Base(path)) {
+			seen[path] = true
+
+			results = append(results, path)
 		}
+
 		return nil
 	})
 
-	sort.Strings(results)
+	return results
+}
 
-	var prioritized []string
-	var otherDir []string
-	for _, r := range results {
-		cat := categorize(r, filePath)
-		if cat == "📁 other dir" {
-			otherDir = append(otherDir, r)
+// skipWalkDir reports whether a directory should be pruned from the related-file walk.
+func skipWalkDir(name string) bool {
+	return name == ".git" || name == "node_modules" || name == "vendor" ||
+		name == ".idea" || name == "__pycache__" || strings.HasPrefix(name, ".")
+}
+
+// prioritizeResults orders test/mock/sibling hits first and caps the result list.
+func prioritizeResults(results []string, filePath string) []string {
+	var (
+		prioritized []string
+		otherDir    []string
+	)
+
+	for _, result := range results {
+		if categorize(result, filePath) == catOtherDir {
+			otherDir = append(otherDir, result)
 		} else {
-			prioritized = append(prioritized, r)
+			prioritized = append(prioritized, result)
 		}
 	}
-	if len(otherDir) > 3 {
-		otherDir = otherDir[:3]
+
+	if len(otherDir) > maxOtherDir {
+		otherDir = otherDir[:maxOtherDir]
 	}
-	results = append(prioritized, otherDir...)
-	if len(results) > 20 {
-		results = results[:20]
+
+	prioritized = append(prioritized, otherDir...)
+	if len(prioritized) > maxResults {
+		prioritized = prioritized[:maxResults]
 	}
-	return results
+
+	return prioritized
 }
 
 func isRelatedName(name, entry string) bool {
@@ -211,12 +338,14 @@ func isRelatedName(name, entry string) bool {
 		name + "_test", name + ".test", "test_" + name,
 		name + "Test", name + ".spec", name + "_spec", name + "Spec",
 	}
+
 	mockPatterns := []string{
 		name + "_mock", "mock_" + name, name + "Mock",
 	}
 	if len(name) > 0 {
 		mockPatterns = append(mockPatterns, "mock"+strings.ToUpper(name[:1])+name[1:])
 	}
+
 	samePatterns := []string{name, toSnake(name), toCamel(name)}
 
 	for _, p := range append(append(testPatterns, mockPatterns...), samePatterns...) {
@@ -224,6 +353,7 @@ func isRelatedName(name, entry string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -235,77 +365,103 @@ func categorize(related, original string) string {
 
 	if isRelatedName(origName, base) {
 		lower := strings.ToLower(base)
-		if strings.Contains(lower, "_test") || strings.Contains(lower, ".test.") ||
-			strings.HasPrefix(lower, "test_") ||
-			strings.Contains(lower, ".spec") || strings.Contains(lower, "_spec") ||
-			strings.HasPrefix(lower, "spec_") {
-			return "🧪 test"
+		if isTestName(lower) {
+			return catTest
 		}
-		if strings.Contains(lower, "_mock") || strings.HasPrefix(lower, "mock_") ||
-			strings.Contains(lower, "mock.") {
-			return "🎭 mock/stub"
+
+		if isMockName(lower) {
+			return catMock
 		}
 	}
+
 	if filepath.Dir(related) == filepath.Dir(original) {
-		return "📄 sibling"
+		return catSibling
 	}
-	return "📁 other dir"
+
+	return catOtherDir
+}
+
+// isTestName reports whether a lowercased base name looks like a test file.
+func isTestName(lower string) bool {
+	return strings.Contains(lower, "_test") || strings.Contains(lower, ".test.") ||
+		strings.HasPrefix(lower, "test_") ||
+		strings.Contains(lower, ".spec") || strings.Contains(lower, "_spec") ||
+		strings.HasPrefix(lower, "spec_")
+}
+
+// isMockName reports whether a lowercased base name looks like a mock/stub file.
+func isMockName(lower string) bool {
+	return strings.Contains(lower, "_mock") || strings.HasPrefix(lower, "mock_") ||
+		strings.Contains(lower, "mock.")
 }
 
 func commonPrefixLen(a, b string) int {
-	n := min(len(b), len(a))
-	for i := range n {
+	minLen := min(len(b), len(a))
+	for i := range minLen {
 		if a[i] != b[i] {
 			return i
 		}
 	}
-	return n
+
+	return minLen
 }
 
-func toSnake(s string) string {
+func toSnake(str string) string {
 	var buf strings.Builder
-	for i, r := range s {
-		if r >= 'A' && r <= 'Z' {
+
+	for i, char := range str {
+		if char >= 'A' && char <= 'Z' {
 			if i > 0 {
 				buf.WriteByte('_')
 			}
-			buf.WriteRune(r + 32)
+
+			buf.WriteRune(char - 'A' + 'a')
 		} else {
-			buf.WriteRune(r)
+			buf.WriteRune(char)
 		}
 	}
+
 	return buf.String()
 }
 
-func toCamel(s string) string {
+func toCamel(str string) string {
 	var buf strings.Builder
+
 	upper := true
-	for _, r := range s {
-		if r == '_' {
+
+	for _, char := range str {
+		if char == '_' {
 			upper = true
+
 			continue
 		}
+
 		if upper {
-			if r >= 'a' && r <= 'z' {
-				buf.WriteRune(r - 32)
+			if char >= 'a' && char <= 'z' {
+				buf.WriteRune(char - 'a' + 'A')
 			} else {
-				buf.WriteRune(r)
+				buf.WriteRune(char)
 			}
+
 			upper = false
 		} else {
-			buf.WriteRune(r)
+			buf.WriteRune(char)
 		}
 	}
+
 	return buf.String()
 }
+
 func depthBetween(root, child string) int {
 	rel, err := filepath.Rel(root, child)
 	if err != nil {
 		return 0
 	}
+
 	if rel == "." {
 		return 0
 	}
+
 	return len(strings.Split(rel, string(filepath.Separator)))
 }
 
@@ -316,27 +472,36 @@ func extractSymbols(filePath string) string {
 	if err != nil || fi.Size() > 100_000 {
 		return ""
 	}
-	funcs, _ := grepfunc.Search(filePath, "*", matchAll, 5, grepfunc.IsFuncSig)
-	types, _ := grepfunc.Search(filePath, "*", matchAll, 5, grepfunc.IsStructSig)
+
+	funcs, _ := grepfunc.Search(filePath, "*", matchAll, maxSymbols, grepfunc.IsFuncSig)
+	types, _ := grepfunc.Search(filePath, "*", matchAll, maxSymbols, grepfunc.IsStructSig)
+
 	var names []string
+
 	seen := map[string]bool{}
-	for _, f := range funcs {
-		if !seen[f.Name] {
-			seen[f.Name] = true
-			names = append(names, f.Name)
+	for _, fn := range funcs {
+		if !seen[fn.Name] {
+			seen[fn.Name] = true
+
+			names = append(names, fn.Name)
 		}
 	}
-	for _, t := range types {
-		if !seen[t.Name] {
-			seen[t.Name] = true
-			names = append(names, t.Name)
+
+	for _, tp := range types {
+		if !seen[tp.Name] {
+			seen[tp.Name] = true
+
+			names = append(names, tp.Name)
 		}
 	}
+
 	if len(names) == 0 {
 		return ""
 	}
-	if len(names) > 5 {
-		names = names[:5]
+
+	if len(names) > maxSymbols {
+		names = names[:maxSymbols]
 	}
+
 	return " (" + strings.Join(names, ", ") + ")"
 }

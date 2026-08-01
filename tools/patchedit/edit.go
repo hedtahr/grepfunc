@@ -2,168 +2,244 @@ package patchedit
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/hedtahr/grepfunc/server"
 )
 
+const (
+	maxFileSize       = 2 * 1024 * 1024
+	minCoverage       = 0.8
+	percentScale      = 100
+	maxAmbiguousShown = 10
+	maxContextLineLen = 100
+	defaultFileMode   = os.FileMode(0644)
+	maxOpsForDiff     = 3
+	eofLine           = 1 << 30
+)
+
+var (
+	errPathRequired = errors.New("path is required")
+	errNoOperations = errors.New("at least one edit, insert, or append_text is required")
+	errFileTooLarge = errors.New("file too large")
+)
+
 func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var args EditFileArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
-	}
-	if args.Path == "" {
-		return nil, fmt.Errorf("path is required")
-	}
-	args.Path = server.ResolvePath(args.Path)
-	if err := server.CheckBounds(args.Path); err != nil {
+	args, err := parseEditArgs(raw)
+	if err != nil {
 		return nil, err
 	}
-	if err := server.CheckBanned(args.Path); err != nil {
-		return nil, err
-	}
+
 	server.SetLastPath(args.Path)
 
-	// insert_file: read file and treat as insert op
-	if args.InsertFile != "" {
-		insertPath := server.ResolvePath(args.InsertFile)
-		if err := server.CheckBounds(insertPath); err != nil {
-			return nil, err
+	defaultEchoLines(raw, args)
+	indexEdits(args)
+
+	original, err := readOriginal(args)
+	if err != nil {
+		return nil, err
+	}
+
+	content := original
+
+	ext := filepath.Ext(args.Path)
+	if formatted, didFmt := preFormat(args.Path, content, ext); didFmt {
+		content = formatted
+	}
+
+	appendEOFInsert(args, content)
+
+	results := computeResults(content, args.Inserts, args.Edits)
+	results = detectOverlaps(results)
+
+	showDiff := !args.NoDiff && len(args.Edits)+len(args.Inserts) <= maxOpsForDiff
+
+	if args.FailFast {
+		for _, r := range results {
+			if !r.Success {
+				return buildResponse(args.Path, original, content, content, results, true,
+					args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, true, args.Terse)
+			}
 		}
-		if err := server.CheckBanned(insertPath); err != nil {
-			return nil, err
-		}
-		data, err := os.ReadFile(insertPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read insert_file: %v", err)
-		}
-		line := args.InsertLine
-		line = max(line, 1)
-		args.Inserts = append(args.Inserts, InsertOp{
-			Line: line,
-			Text: string(data),
-		})
+	}
+
+	current := applyResults(content, results)
+
+	return buildResponse(args.Path, original, content, current, results, args.DryRun,
+		args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false, args.Terse)
+}
+
+func parseEditArgs(raw json.RawMessage) (*EditFileArgs, error) {
+	var args EditFileArgs
+
+	err := json.Unmarshal(raw, &args)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	if args.Path == "" {
+		return nil, errPathRequired
+	}
+
+	args.Path = server.ResolvePath(args.Path)
+
+	err = server.CheckBounds(args.Path)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	err = server.CheckBanned(args.Path)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	err = expandInsertFile(&args)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(args.Edits) == 0 && len(args.Inserts) == 0 && args.AppendText == "" {
-		return nil, fmt.Errorf("at least one edit, insert, or append_text is required")
+		return nil, errNoOperations
 	}
 
-	// #7: 2MB size guard
-	if fi, err := os.Stat(args.Path); err == nil && fi.Size() > 2*1024*1024 {
-		return nil, fmt.Errorf("file too large (%d bytes). Max 2MB for patch_file; use batch_patch with path filter or edit manually.", fi.Size())
+	return &args, nil
+}
+
+// expandInsertFile reads the insert_file and appends it as an insert operation.
+func expandInsertFile(args *EditFileArgs) error {
+	if args.InsertFile == "" {
+		return nil
+	}
+
+	insertPath := server.ResolvePath(args.InsertFile)
+
+	err := server.CheckBounds(insertPath)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	err = server.CheckBanned(insertPath)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	data, err := os.ReadFile(insertPath) // #nosec G304 -- insert_file path bounds-checked above
+	if err != nil {
+		return fmt.Errorf("failed to read insert_file: %w", err)
+	}
+
+	line := max(args.InsertLine, 1)
+	args.Inserts = append(args.Inserts, InsertOp{
+		Line:  line,
+		Text:  string(data),
+		Index: 0,
+	})
+
+	return nil
+}
+
+// #12: default echo_lines to 3 unless suppressed or explicitly set in raw JSON.
+func defaultEchoLines(raw json.RawMessage, args *EditFileArgs) {
+	if args.EchoLines != 0 || args.NoDiff {
+		return
+	}
+
+	var rawMap map[string]any
+	if json.Unmarshal(raw, &rawMap) != nil {
+		return
+	}
+
+	if _, ok := rawMap["echo_lines"]; ok {
+		return
+	}
+
+	args.EchoLines = 3
+}
+
+// #1: auto-number indices when all default (0) and multiple edits exist.
+func indexEdits(args *EditFileArgs) {
+	autoNumberEdits(args)
+	autoNumberInserts(args)
+}
+
+func autoNumberEdits(args *EditFileArgs) {
+	if len(args.Edits) == 0 {
+		return
+	}
+
+	for _, e := range args.Edits {
+		if e.Index != 0 {
+			return
+		}
+	}
+
+	for i := range args.Edits {
+		args.Edits[i].Index = i + 1
+	}
+}
+
+func autoNumberInserts(args *EditFileArgs) {
+	if len(args.Inserts) == 0 {
+		return
+	}
+
+	for _, ins := range args.Inserts {
+		if ins.Index != 0 {
+			return
+		}
+	}
+
+	for i := range args.Inserts {
+		args.Inserts[i].Index = i + len(args.Edits) + 1
+	}
+}
+
+// #7: 2MB size guard, then read the file (create_if_missing → empty).
+func readOriginal(args *EditFileArgs) ([]byte, error) {
+	fi, err := os.Stat(args.Path)
+	if err == nil && fi.Size() > maxFileSize {
+		return nil, fmt.Errorf(
+			"%w (%d bytes). Max 2MB for patch_file; "+
+				"use batch_patch with path filter or edit manually",
+			errFileTooLarge, fi.Size())
 	}
 
 	original, err := os.ReadFile(args.Path)
 	if err != nil {
 		if os.IsNotExist(err) && args.CreateIfMissing {
-			original = nil
-		} else {
-			return nil, fmt.Errorf("failed to read file: %v", err)
+			return nil, nil
 		}
+
+		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// #12: default echo_lines to 3 unless suppressed
-	if args.EchoLines == 0 && !args.NoDiff {
-		// Check if explicitly set to 0 in raw JSON
-		var rawMap map[string]any
-		if json.Unmarshal(raw, &rawMap) == nil {
-			if _, ok := rawMap["echo_lines"]; !ok {
-				args.EchoLines = 3
-			}
-		}
+	return original, nil
+}
+
+func appendEOFInsert(args *EditFileArgs, content []byte) {
+	if args.AppendText == "" {
+		return
 	}
 
-	// #1: auto-number indices when all default (0) and multiple edits exist
-	allDefaultIdx := true
-	for _, e := range args.Edits {
-		if e.Index != 0 {
-			allDefaultIdx = false
-			break
-		}
-	}
-	if allDefaultIdx && len(args.Edits) >= 1 {
-		for i := range args.Edits {
-			args.Edits[i].Index = i + 1
-		}
-	}
-	allDefaultIns := true
-	for _, ins := range args.Inserts {
-		if ins.Index != 0 {
-			allDefaultIns = false
-			break
-		}
-	}
-	if allDefaultIns && len(args.Inserts) >= 1 {
-		for i := range args.Inserts {
-			args.Inserts[i].Index = i + len(args.Edits) + 1
-		}
+	sep := ""
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		sep = "\n"
 	}
 
-	content := original
-	ext := filepath.Ext(args.Path)
-	if formatted, didFmt, _ := preFormat(args.Path, content, ext); didFmt {
-		content = formatted
-	}
-
-	if args.AppendText != "" {
-		sep := ""
-		if len(content) > 0 && content[len(content)-1] != '\n' {
-			sep = "\n"
-		}
-		args.Inserts = append(args.Inserts, InsertOp{
-			Line:  1 << 30,
-			Text:  sep + args.AppendText,
-			Index: len(args.Edits) + len(args.Inserts) + 1,
-		})
-	}
-
-	results := computeResults(content, args.Inserts, args.Edits)
-	results = detectOverlaps(results)
-
-	// #14: auto no_diff when >3 total ops
-	showDiff := !args.NoDiff
-	if showDiff && len(args.Edits)+len(args.Inserts) > 3 {
-		showDiff = false
-	}
-
-	if args.FailFast {
-		for _, r := range results {
-			if !r.Success {
-				// #2: mark as fail_fast blocked
-				return buildResponse(args.Path, original, content, content, results, true, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, true, args.Terse)
-			}
-		}
-	}
-
-	toApply := make([]editResult, 0, len(results))
-	for _, r := range results {
-		if r.Success {
-			toApply = append(toApply, r)
-		}
-	}
-	sort.Slice(toApply, func(i, j int) bool {
-		oi, oj := 0, 0
-		if len(toApply[i].Matches) > 0 {
-			oi = toApply[i].Matches[0].Offset
-		}
-		if len(toApply[j].Matches) > 0 {
-			oj = toApply[j].Matches[0].Offset
-		}
-		return oi > oj
+	args.Inserts = append(args.Inserts, InsertOp{
+		Line:  eofLine,
+		Text:  sep + args.AppendText,
+		Index: len(args.Edits) + len(args.Inserts) + 1,
 	})
-	current := content
-	for _, r := range toApply {
-		current = applyReplacement(current, r)
-	}
-
-	return buildResponse(args.Path, original, content, current, results, args.DryRun, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false, args.Terse)
 }
 
 // detectOverlaps fails edits whose match regions intersect. Applying overlapping
@@ -174,7 +250,9 @@ func detectOverlaps(results []editResult) []editResult {
 		res *editResult
 		loc MatchLoc
 	}
+
 	var list []locRef
+
 	for i := range results {
 		if results[i].Success && len(results[i].Matches) > 0 {
 			for _, loc := range results[i].Matches {
@@ -182,22 +260,26 @@ func detectOverlaps(results []editResult) []editResult {
 			}
 		}
 	}
-	for i := 0; i < len(list); i++ {
-		for j := i + 1; j < len(list); j++ {
-			if !rangesOverlap(list[i].loc, list[j].loc) {
+
+	for listIdx := range list {
+		for otherIdx := listIdx + 1; otherIdx < len(list); otherIdx++ {
+			if !rangesOverlap(list[listIdx].loc, list[otherIdx].loc) {
 				continue
 			}
-			fail := list[j].res
-			if list[i].loc.Offset > list[j].loc.Offset {
-				fail = list[i].res
+
+			fail := list[otherIdx].res
+			if list[listIdx].loc.Offset > list[otherIdx].loc.Offset {
+				fail = list[listIdx].res
 			}
+
 			if fail.Success {
 				fail.Success = false
 				fail.Error = fmt.Sprintf("OVERLAP: region %d-%d intersects region %d-%d of another edit; remove or merge one.",
-					list[i].loc.Offset, list[i].loc.EndOffset, list[j].loc.Offset, list[j].loc.EndOffset)
+					list[listIdx].loc.Offset, list[listIdx].loc.EndOffset, list[otherIdx].loc.Offset, list[otherIdx].loc.EndOffset)
 			}
 		}
 	}
+
 	return results
 }
 
@@ -207,11 +289,11 @@ func rangesOverlap(a, b MatchLoc) bool {
 }
 
 func computeResults(content []byte, inserts []InsertOp, edits []EditOp) []editResult {
-	var results []editResult
+	results := make([]editResult, 0, len(inserts)+len(edits))
 
 	sorted := make([]InsertOp, len(inserts))
 	copy(sorted, inserts)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Line > sorted[j].Line })
+	sort.Slice(sorted, func(left, right int) bool { return sorted[left].Line > sorted[right].Line })
 
 	for _, ins := range sorted {
 		r := applyInsert(content, ins, ins.Index)
@@ -223,16 +305,20 @@ func computeResults(content []byte, inserts []InsertOp, edits []EditOp) []editRe
 		results = append(results, r)
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		iOrder := results[i].Index
-		jOrder := results[j].Index
-		if len(results[i].Matches) > 0 && results[i].Matches[0].Strategy == "insert" {
-			iOrder -= 10000
+	sort.Slice(results, func(left, right int) bool {
+		leftOrder := results[left].Index
+
+		rightOrder := results[right].Index
+
+		if len(results[left].Matches) > 0 && results[left].Matches[0].Strategy == strategyInsert {
+			leftOrder -= 10000
 		}
-		if len(results[j].Matches) > 0 && results[j].Matches[0].Strategy == "insert" {
-			jOrder -= 10000
+
+		if len(results[right].Matches) > 0 && results[right].Matches[0].Strategy == strategyInsert {
+			rightOrder -= 10000
 		}
-		return iOrder < jOrder
+
+		return leftOrder < rightOrder
 	})
 
 	return results
@@ -240,177 +326,436 @@ func computeResults(content []byte, inserts []InsertOp, edits []EditOp) []editRe
 
 func runValidate(path string) string {
 	ext := filepath.Ext(path)
+
 	var cmd *exec.Cmd
+
 	switch ext {
 	case ".go":
-		cmd = exec.Command("go", "vet", ".")
+		cmd = exec.CommandContext(context.Background(), "go", "vet", ".")
 		cmd.Dir = filepath.Dir(path)
 	case ".py":
-		cmd = exec.Command("python3", "-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())", path)
+		// #nosec G204 -- paths bounds-checked by server
+		cmd = exec.CommandContext(context.Background(), "python3", "-c",
+			"import ast, sys; ast.parse(open(sys.argv[1]).read())", path)
 	default:
 		return ""
 	}
+
 	if cmd == nil {
 		return ""
 	}
-	if _, err := exec.LookPath(cmd.Path); err != nil {
+
+	_, err := exec.LookPath(cmd.Path)
+	if err != nil {
 		return ""
 	}
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+
+	err = cmd.Run()
+	if err != nil {
 		return strings.TrimSpace(stderr.String())
 	}
+
 	return ""
 }
 
 func applyInsert(content []byte, ins InsertOp, index int) editResult {
-	r := editResult{Index: index, NewText: ins.Text}
+	result := editResult{
+		Index:        index,
+		Success:      false,
+		Matches:      nil,
+		Error:        "",
+		OldText:      "",
+		NewText:      ins.Text,
+		LinesChanged: 0,
+	}
 	if ins.Line < 1 {
-		r.Error = "insert line must be >= 1"
-		return r
+		result.Error = "insert line must be >= 1"
+
+		return result
 	}
+
 	if ins.Text == "" {
-		r.Error = "insert text is empty"
-		return r
+		result.Error = "insert text is empty"
+
+		return result
 	}
+
 	lineNum := 1
+
 	ofs := 0
 	for ofs < len(content) {
 		if lineNum == ins.Line {
 			break
 		}
+
 		if content[ofs] == '\n' {
 			lineNum++
 		}
+
 		ofs++
 	}
+
 	text := ins.Text
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
-	r.Success = true
-	r.Matches = []MatchLoc{{Offset: ofs, EndOffset: ofs, LineStart: ins.Line, LineEnd: ins.Line, Strategy: "insert"}}
-	r.OldText = ""
-	r.NewText = text
-	r.LinesChanged = 1
-	return r
+
+	result.Success = true
+	result.Matches = []MatchLoc{{Offset: ofs, EndOffset: ofs,
+		LineStart: ins.Line, LineEnd: ins.Line, Strategy: strategyInsert}}
+	result.OldText = ""
+	result.NewText = text
+	result.LinesChanged = 1
+
+	return result
 }
 
-func findAndReplace(content []byte, op EditOp, index int) editResult {
-	r := editResult{Index: index, OldText: op.OldText, NewText: op.NewText}
-	if op.OldText == "" {
-		r.Error = "old_text is empty"
-		return r
+func findAndReplace(content []byte, editOp EditOp, index int) editResult {
+	result := editResult{
+		Index:        index,
+		Success:      false,
+		Matches:      nil,
+		Error:        "",
+		OldText:      editOp.OldText,
+		NewText:      editOp.NewText,
+		LinesChanged: 0,
+	}
+	if editOp.OldText == "" {
+		result.Error = "old_text is empty"
+
+		return result
 	}
 
-	locs := findAllMatches(content, op.OldText)
+	locs := findAllMatches(content, editOp.OldText)
+
 	switch {
 	case len(locs) == 0:
-		n := findNearest(content, op.OldText)
-		if len(content) == 0 || len(strings.TrimSpace(string(content))) == 0 {
-			r.Error = "NO_MATCH: not found (file is empty or no meaningful content)"
-		} else {
-			r.Error = fmt.Sprintf("NO_MATCH: not found. Nearest: line %d (%q)", n.Line, n.Preview)
-		}
+		result.Error = noMatchError(content, editOp.OldText)
 	case len(locs) == 1:
-		if locs[0].Strategy == "substring_fuzzy" {
-			matchedLen := locs[0].EndOffset - locs[0].Offset
-			coverage := float64(matchedLen) / float64(len(op.OldText))
-			if coverage < 0.8 {
-				n := findNearest(content, op.OldText)
-				r.Error = fmt.Sprintf("NO_MATCH: substring_fuzzy only matched %d/%d chars (%.0f%%). Add more context. Nearest: line %d (%q)",
-					matchedLen, len(op.OldText), 100*coverage, n.Line, n.Preview)
-				r.Matches = locs
-				return r
-			}
-		}
-		r.Success = true
-		r.Matches = locs
-		r.LinesChanged = locs[0].LineEnd - locs[0].LineStart + 1
+		result = singleMatchResult(result, content, editOp, locs)
 	default:
-		if locs[0].Strategy != "exact" && op.ReplaceAll {
-			r.Error = fmt.Sprintf("replace_all requires exact match (got %s). Remove replace_all or add context for exact match.", locs[0].Strategy)
-			r.Matches = locs
-			return r
-		}
-		if op.ReplaceAll {
-			r.Success = true
-			r.Matches = locs
-			r.LinesChanged = locs[len(locs)-1].LineEnd - locs[0].LineStart + 1
-		} else {
-			var b strings.Builder
-			show := locs
-			omitted := 0
-			if len(locs) > 10 {
-				show = locs[:10]
-				omitted = len(locs) - 10
-			}
-			fmt.Fprintf(&b, "AMBIGUOUS_MATCH: %d locations. Add more context to disambiguate:\n", len(locs))
-			for _, l := range show {
-				ctx := extractContext(content, l, 1)
-				fmt.Fprintf(&b, "  L%d: %s\n", l.LineStart, ctx)
-			}
-			if omitted > 0 {
-				fmt.Fprintf(&b, "  ... and %d more locations\n", omitted)
-			}
-			r.Error = b.String()
-			r.Matches = locs
+		result = multiMatchResult(result, content, editOp, locs)
+	}
+
+	return result
+}
+
+func noMatchError(content []byte, oldText string) string {
+	nearest := findNearest(content, oldText)
+
+	if len(content) == 0 || len(strings.TrimSpace(string(content))) == 0 {
+		return "NO_MATCH: not found (file is empty or no meaningful content)"
+	}
+
+	return fmt.Sprintf("NO_MATCH: not found. Nearest: line %d (%q)", nearest.Line, nearest.Preview)
+}
+
+func singleMatchResult(result editResult, content []byte, editOp EditOp, locs []MatchLoc) editResult {
+	if locs[0].Strategy == strategySubstringFuzzy {
+		matchedLen := locs[0].EndOffset - locs[0].Offset
+
+		coverage := float64(matchedLen) / float64(len(editOp.OldText))
+		if coverage < minCoverage {
+			n := findNearest(content, editOp.OldText)
+			result.Error = fmt.Sprintf(
+				"NO_MATCH: substring_fuzzy only matched %d/%d chars (%.0f%%). "+
+					"Add more context. Nearest: line %d (%q)",
+				matchedLen, len(editOp.OldText), percentScale*coverage, n.Line, n.Preview)
+			result.Matches = locs
+
+			return result
 		}
 	}
-	return r
+
+	result.Success = true
+	result.Matches = locs
+	result.LinesChanged = locs[0].LineEnd - locs[0].LineStart + 1
+
+	return result
+}
+
+func multiMatchResult(result editResult, content []byte, editOp EditOp, locs []MatchLoc) editResult {
+	if locs[0].Strategy != strategyExact && editOp.ReplaceAll {
+		result.Error = fmt.Sprintf(
+			"replace_all requires exact match (got %s). "+
+				"Remove replace_all or add context for exact match.",
+			locs[0].Strategy)
+		result.Matches = locs
+
+		return result
+	}
+
+	if editOp.ReplaceAll {
+		result.Success = true
+		result.Matches = locs
+		result.LinesChanged = locs[len(locs)-1].LineEnd - locs[0].LineStart + 1
+	} else {
+		result.Error = ambiguousError(content, locs)
+		result.Matches = locs
+	}
+
+	return result
+}
+
+func ambiguousError(content []byte, locs []MatchLoc) string {
+	var buf strings.Builder
+
+	show := locs
+	omitted := 0
+
+	if len(locs) > maxAmbiguousShown {
+		show = locs[:maxAmbiguousShown]
+		omitted = len(locs) - maxAmbiguousShown
+	}
+
+	fmt.Fprintf(&buf, "AMBIGUOUS_MATCH: %d locations. Add more context to disambiguate:\n", len(locs))
+
+	for _, l := range show {
+		ctx := extractContext(content, l, 1)
+		fmt.Fprintf(&buf, "  L%d: %s\n", l.LineStart, ctx)
+	}
+
+	if omitted > 0 {
+		fmt.Fprintf(&buf, "  ... and %d more locations\n", omitted)
+	}
+
+	return buf.String()
 }
 
 func extractContext(content []byte, loc MatchLoc, radius int) string {
 	lines := strings.Split(string(content), "\n")
 	start := loc.LineStart - 1 - radius
 	start = max(start, 0)
+
 	end := loc.LineEnd - 1 + radius
 	if end >= len(lines) {
 		end = len(lines) - 1
 	}
-	var b strings.Builder
-	for i := start; i <= end; i++ {
-		line := lines[i]
-		if len(line) > 100 {
-			line = line[:100] + "..."
+
+	var buf strings.Builder
+
+	for idx := start; idx <= end; idx++ {
+		line := lines[idx]
+		if len(line) > maxContextLineLen {
+			line = line[:maxContextLineLen] + "..."
 		}
-		b.WriteString(strings.TrimRight(line, " \t\r"))
-		if i < end {
-			b.WriteString(" ↵ ")
+
+		buf.WriteString(strings.TrimRight(line, " \t\r"))
+
+		if idx < end {
+			buf.WriteString(" ↵ ")
 		}
 	}
-	return b.String()
+
+	return buf.String()
 }
 
-func applyReplacement(content []byte, r editResult) []byte {
-	if !r.Success || len(r.Matches) == 0 {
+func applyReplacement(content []byte, result editResult) []byte {
+	if !result.Success || len(result.Matches) == 0 {
 		return content
 	}
 	// Apply in reverse order so earlier offsets stay valid (handles replace_all multi-match)
 	out := content
-	for i := len(r.Matches) - 1; i >= 0; i-- {
-		loc := r.Matches[i]
+
+	for _, v := range slices.Backward(result.Matches) {
+		loc := v
+
 		oldLen := loc.EndOffset - loc.Offset
 		if oldLen < 0 || loc.Offset > len(out) {
 			continue
 		}
+
 		if loc.Offset+oldLen > len(out) {
 			oldLen = len(out) - loc.Offset
 		}
+
 		var buf bytes.Buffer
+
 		buf.Write(out[:loc.Offset])
-		buf.WriteString(r.NewText)
+		buf.WriteString(result.NewText)
 		buf.Write(out[loc.Offset+oldLen:])
 		out = buf.Bytes()
 	}
+
 	return out
 }
 
-func buildResponse(path string, original, formatted, current []byte, results []editResult, dryRun bool, diffCtx int, skipValidate, showDiff bool, echoLines int, failFastBlocked, terse bool) (*server.ToolCallResult, error) {
+func applyResults(content []byte, results []editResult) []byte {
+	_, current := applySuccessful(content, results)
+
+	return current
+}
+
+func applySuccessful(content []byte, results []editResult) (int, []byte) {
+	toApply := make([]editResult, 0, len(results))
+
+	for _, r := range results {
+		if r.Success {
+			toApply = append(toApply, r)
+		}
+	}
+
+	sortByMatchOffsetDesc(toApply)
+
+	current := content
+	for _, r := range toApply {
+		current = applyReplacement(current, r)
+	}
+
+	return len(toApply), current
+}
+
+func sortByMatchOffsetDesc(results []editResult) {
+	sort.Slice(results, func(i, j int) bool {
+		return matchOffset(results[i]) > matchOffset(results[j])
+	})
+}
+
+func matchOffset(r editResult) int {
+	if len(r.Matches) > 0 {
+		return r.Matches[0].Offset
+	}
+
+	return 0
+}
+
+func buildResponse(path string, original, formatted, current []byte, results []editResult, dryRun bool,
+	diffCtx int, skipValidate, showDiff bool, echoLines int, failFastBlocked, terse bool) (*server.ToolCallResult, error) {
+	successCount, failCount := countResults(results)
+
+	if terse {
+		return terseResponse(path, current, results, dryRun, skipValidate, successCount, failCount)
+	}
+
+	if successCount == 0 || failFastBlocked {
+		return noChangeResponse(results, failFastBlocked)
+	}
+
 	var buf bytes.Buffer
-	successCount := 0
-	failCount := 0
+
+	writeHeader(&buf, path, original, formatted, successCount, len(results))
+
+	if dryRun {
+		writeEditTable(&buf, results, true)
+		buf.WriteString("\n[DRY RUN — file not modified]")
+
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: contentTypeText, Text: buf.String()}},
+			IsError: false,
+		}, nil
+	}
+
+	writeEditTable(&buf, results, false)
+	writeLowConfidence(&buf, results)
+
+	if showDiff {
+		writeDiffBlock(&buf, formatted, current, path, diffCtx)
+	}
+
+	if echoLines > 0 {
+		writeEchoBlock(&buf, current, path, results, echoLines)
+	}
+
+	err := atomicWrite(path, current)
+	if err != nil {
+		fmt.Fprintf(&buf, "\nWARNING: write failed: %v", err)
+
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: contentTypeText, Text: buf.String()}},
+			IsError: true,
+		}, nil
+	}
+
+	if result := runValidate(path); result != "" && !skipValidate {
+		buf.WriteString("\n\n\u26a0\ufe0f Validation: " + result)
+	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: contentTypeText, Text: buf.String()}},
+		IsError: false,
+	}, nil
+}
+
+func terseResponse(path string, current []byte, results []editResult, dryRun, skipValidate bool,
+	successCount, failCount int) (*server.ToolCallResult, error) {
+	if failCount > 0 {
+		msg := fmt.Sprintf("[FAIL] %d/%d edits: %s", successCount, len(results), joinErrors(results))
+
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: contentTypeText, Text: msg}},
+			IsError: false,
+		}, nil
+	}
+
+	if !dryRun {
+		err := atomicWrite(path, current)
+		if err != nil {
+			msg := fmt.Sprintf("[FAIL] write error: %v", err)
+
+			return &server.ToolCallResult{
+				Content: []server.ToolCallContent{{Type: contentTypeText, Text: msg}},
+				IsError: true,
+			}, nil
+		}
+
+		if !skipValidate {
+			if result := runValidate(path); result != "" {
+				msg := fmt.Sprintf("[OK] %d/%d applied — validation: %s", successCount, len(results), result)
+
+				return &server.ToolCallResult{
+					Content: []server.ToolCallContent{{Type: contentTypeText, Text: msg}},
+					IsError: false,
+				}, nil
+			}
+		}
+	}
+
+	msg := fmt.Sprintf("[OK] %d/%d edits applied to %s", successCount, len(results), path)
+	if dryRun {
+		msg = fmt.Sprintf("[DRY RUN] %d/%d edits would apply to %s", successCount, len(results), path)
+	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: contentTypeText, Text: msg}},
+		IsError: false,
+	}, nil
+}
+
+func noChangeResponse(results []editResult, failFastBlocked bool) (*server.ToolCallResult, error) {
+	var buf bytes.Buffer
+
+	if failFastBlocked {
+		buf.WriteString("[BLOCKED] all edits\n")
+
+		for _, r := range results {
+			if r.Success {
+				fmt.Fprintf(&buf, "Edit %d: would have matched (%s, L%d-%d)\n",
+					r.Index, r.Matches[0].Strategy, r.Matches[0].LineStart, r.Matches[0].LineEnd)
+			} else {
+				fmt.Fprintf(&buf, "Edit %d: %s\n", r.Index, r.Error)
+			}
+		}
+	} else {
+		buf.WriteString("No edits were applied.\n")
+
+		for _, r := range results {
+			fmt.Fprintf(&buf, "Edit %d: %s\n", r.Index, r.Error)
+		}
+	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: contentTypeText, Text: buf.String()}},
+		IsError: false,
+	}, nil
+}
+
+func countResults(results []editResult) (int, int) {
+	successCount, failCount := 0, 0
+
 	for _, r := range results {
 		if r.Success {
 			successCount++
@@ -419,191 +764,154 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 		}
 	}
 
-	if terse {
-		if failCount > 0 {
-			var errs []string
-			for _, r := range results {
-				if !r.Success {
-					errs = append(errs, r.Error)
-				}
-			}
-			return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[FAIL] %d/%d edits: %s", successCount, len(results), strings.Join(errs, "; "))}}}, nil
+	return successCount, failCount
+}
+
+func joinErrors(results []editResult) string {
+	var errs []string
+
+	for _, r := range results {
+		if !r.Success {
+			errs = append(errs, r.Error)
 		}
-		if !dryRun {
-			if err := atomicWrite(path, current); err != nil {
-				return &server.ToolCallResult{
-					Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[FAIL] write error: %v", err)}},
-					IsError: true,
-				}, nil
-			}
-			if !skipValidate {
-				if result := runValidate(path); result != "" {
-					return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("[OK] %d/%d applied — validation: %s", successCount, len(results), result)}}}, nil
-				}
-			}
-		}
-		msg := fmt.Sprintf("[OK] %d/%d edits applied to %s", successCount, len(results), path)
-		if dryRun {
-			msg = fmt.Sprintf("[DRY RUN] %d/%d edits would apply to %s", successCount, len(results), path)
-		}
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: msg}}}, nil
 	}
 
-	anyChange := successCount > 0
+	return strings.Join(errs, "; ")
+}
 
-	// #2: fail_fast blocked overrides success count
-	if failFastBlocked {
-		anyChange = false
-		successCount = 0
-	}
+func writeHeader(buf *bytes.Buffer, path string, original, formatted []byte, successCount, total int) {
+	fmt.Fprintf(buf, "%s — %d/%d", server.RelPath(path), successCount, total)
 
-	if !anyChange {
-		if failFastBlocked {
-			buf.WriteString("[BLOCKED] all edits\n")
-			for _, r := range results {
-				if r.Success {
-					fmt.Fprintf(&buf, "Edit %d: would have matched (%s, L%d-%d)\n",
-						r.Index, r.Matches[0].Strategy, r.Matches[0].LineStart, r.Matches[0].LineEnd)
-				} else {
-					fmt.Fprintf(&buf, "Edit %d: %s\n", r.Index, r.Error)
-				}
-			}
-		} else {
-			buf.WriteString("No edits were applied.\n")
-			for _, r := range results {
-				fmt.Fprintf(&buf, "Edit %d: %s\n", r.Index, r.Error)
-			}
-		}
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
-	}
-
-	fmt.Fprintf(&buf, "%s — %d/%d", server.RelPath(path), successCount, len(results))
 	if !bytes.Equal(original, formatted) {
 		buf.WriteString(" (pre-formatted)")
 	}
+
 	buf.WriteString("\n")
+}
 
-	// #13: terse dry_run table
-	if dryRun {
-		for _, r := range results {
-			n := r.Index
-			if r.Success {
-				switch {
-				case r.Matches[0].Strategy == "insert" && r.Matches[0].LineStart >= 1<<30:
-					fmt.Fprintf(&buf, "- Edit %d: \u2713 insert EOF\n", n)
-				case r.Matches[0].Strategy == "insert":
-					fmt.Fprintf(&buf, "- Edit %d: \u2713 insert L%d\n", n, r.Matches[0].LineStart)
-				case len(r.Matches) > 1:
-					fmt.Fprintf(&buf, "- Edit %d: \u2713 %d\u00d7 %s %s\n", n, len(r.Matches), r.Matches[0].Strategy, confTier(r.Matches[0].Strategy))
-				default:
-					fmt.Fprintf(&buf, "- Edit %d: \u2713 L%d %s %s\n", n, r.Matches[0].LineStart, r.Matches[0].Strategy, confTier(r.Matches[0].Strategy))
-				}
-			} else {
-				fmt.Fprintf(&buf, "- Edit %d: \u274c %s\n", n, r.Error)
-			}
-		}
-		buf.WriteString("\n[DRY RUN — file not modified]")
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
+func writeEditTable(buf *bytes.Buffer, results []editResult, dryRun bool) {
+	for _, r := range results {
+		writeEditRow(buf, r, dryRun)
+	}
+}
+
+func writeEditRow(buf *bytes.Buffer, result editResult, dryRun bool) {
+	editIndex := result.Index
+
+	if !result.Success {
+		fmt.Fprintf(buf, "- Edit %d: \u274c %s\n", editIndex, result.Error)
+
+		return
 	}
 
-	for _, r := range results {
-		n := r.Index
-		if r.Success {
-			switch {
-			case r.Matches[0].Strategy == "insert" && r.Matches[0].LineStart >= 1<<30:
-				fmt.Fprintf(&buf, "- Edit %d: ✓ insert EOF\n", n)
-			case r.Matches[0].Strategy == "insert":
-				fmt.Fprintf(&buf, "- Edit %d: ✓ insert L%d\n", n, r.Matches[0].LineStart)
-			case len(r.Matches) > 1:
-				fmt.Fprintf(&buf, "- Edit %d: ✓ %d×%s %s\n",
-					n, len(r.Matches), r.Matches[0].Strategy, confTier(r.Matches[0].Strategy))
-			default:
-				fmt.Fprintf(&buf, "- Edit %d: ✓ L%d-%d %s %s\n",
-					n, r.Matches[0].LineStart, r.Matches[0].LineEnd, r.Matches[0].Strategy, confTier(r.Matches[0].Strategy))
-			}
-		} else {
-			fmt.Fprintf(&buf, "- Edit %d: \u274c %s\n", n, r.Error)
-		}
-	}
+	loc := result.Matches[0]
+	tier := confTier(loc.Strategy)
 
+	switch {
+	case loc.Strategy == strategyInsert && loc.LineStart >= eofLine:
+		fmt.Fprintf(buf, "- Edit %d: ✓ insert EOF\n", editIndex)
+	case loc.Strategy == strategyInsert:
+		fmt.Fprintf(buf, "- Edit %d: ✓ insert L%d\n", editIndex, loc.LineStart)
+	case len(result.Matches) > 1:
+		fmt.Fprintf(buf, "- Edit %d: ✓ %d×%s %s\n", editIndex, len(result.Matches), loc.Strategy, tier)
+	case dryRun:
+		fmt.Fprintf(buf, "- Edit %d: ✓ L%d %s %s\n", editIndex, loc.LineStart, loc.Strategy, tier)
+	default:
+		fmt.Fprintf(buf, "- Edit %d: ✓ L%d-%d %s %s\n", editIndex, loc.LineStart, loc.LineEnd, loc.Strategy, tier)
+	}
+}
+
+func writeLowConfidence(buf *bytes.Buffer, results []editResult) {
 	for _, r := range results {
-		if r.Success && len(r.Matches) > 0 && r.Matches[0].Strategy == "substring_fuzzy" {
-			buf.WriteString("\n\u26a0\ufe0f LOW_CONFIDENCE: one or more edits matched via substring_fuzzy \u2014 verify the diff carefully.\n")
+		if r.Success && len(r.Matches) > 0 && r.Matches[0].Strategy == strategySubstringFuzzy {
+			buf.WriteString("\n\u26a0\ufe0f LOW_CONFIDENCE: one or more edits matched via substring_fuzzy ")
+			buf.WriteString("\u2014 verify the diff carefully.\n")
+
 			break
 		}
 	}
-
-	if showDiff {
-		diff := unifiedDiff(formatted, current, path, diffCtx)
-		buf.WriteString("\n```diff\n")
-		buf.WriteString(diff)
-		buf.WriteString("```")
-	}
-
-	if echoLines > 0 && anyChange {
-		firstLine := 1
-		for _, r := range results {
-			if r.Success && len(r.Matches) > 0 && r.Matches[0].LineStart < 1<<30 {
-				firstLine = r.Matches[0].LineStart
-				break
-			}
-		}
-		lines := strings.Split(string(current), "\n")
-		start := max(0, firstLine-1-echoLines)
-		end := min(len(lines)-1, firstLine-1+echoLines)
-		ext := strings.TrimPrefix(filepath.Ext(path), ".")
-		if ext == "" {
-			ext = "txt"
-		}
-		fmt.Fprintf(&buf, "\n**Result (L%d\u00b1%d):**\n```%s\n", firstLine, echoLines, ext)
-		for i := start; i <= end; i++ {
-			fmt.Fprintf(&buf, "%4d: %s\n", i+1, lines[i])
-		}
-		buf.WriteString("```")
-	}
-
-	if dryRun {
-		buf.WriteString("\n[DRY RUN — file not modified]")
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
-	}
-
-	if err := atomicWrite(path, current); err != nil {
-		fmt.Fprintf(&buf, "\nWARNING: write failed: %v", err)
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
-			IsError: true,
-		}, nil
-	}
-	if result := runValidate(path); result != "" && !skipValidate {
-		buf.WriteString("\n\n\u26a0\ufe0f Validation: " + result)
-	}
-	return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
 }
 
+func writeDiffBlock(buf *bytes.Buffer, formatted, current []byte, path string, diffCtx int) {
+	diff := unifiedDiff(formatted, current, path, diffCtx)
+
+	buf.WriteString("\n```diff\n")
+	buf.WriteString(diff)
+	buf.WriteString("```")
+}
+
+func writeEchoBlock(buf *bytes.Buffer, current []byte, path string, results []editResult, echoLines int) {
+	firstLine := firstChangedLine(results)
+	lines := strings.Split(string(current), "\n")
+	start := max(0, firstLine-1-echoLines)
+	end := min(len(lines)-1, firstLine-1+echoLines)
+
+	ext := strings.TrimPrefix(filepath.Ext(path), ".")
+	if ext == "" {
+		ext = "txt"
+	}
+
+	fmt.Fprintf(buf, "\n**Result (L%d\u00b1%d):**\n```%s\n", firstLine, echoLines, ext)
+
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(buf, "%4d: %s\n", i+1, lines[i])
+	}
+
+	buf.WriteString("```")
+}
+
+func firstChangedLine(results []editResult) int {
+	for _, r := range results {
+		if r.Success && len(r.Matches) > 0 && r.Matches[0].LineStart < eofLine {
+			return r.Matches[0].LineStart
+		}
+	}
+
+	return 1
+}
+
+// atomicWrite writes via a temp file then renames, preserving the existing file mode.
 func atomicWrite(path string, content []byte) error {
 	tmpPath := path + ".tmp"
-	os.Remove(tmpPath)
-	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
-		return err
+	_ = os.Remove(tmpPath)
+
+	mode := defaultFileMode
+
+	info, err := os.Stat(path)
+	if err == nil {
+		mode = info.Mode()
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return os.WriteFile(path, content, 0644)
+
+	// #nosec G703 -- paths bounds-checked by server
+	err = os.WriteFile(tmpPath, content, mode)
+	if err != nil {
+		return fmt.Errorf("write temp file: %w", err)
 	}
+
+	err = os.Rename(tmpPath, path)
+	if err != nil {
+		// #nosec G703 -- paths bounds-checked by server
+		fallbackErr := os.WriteFile(path, content, mode)
+		if fallbackErr != nil {
+			return fmt.Errorf("rename %s: %w", tmpPath, errors.Join(err, fallbackErr))
+		}
+	}
+
 	return nil
 }
 
-// #15: confidence tier annotation
+// #15: confidence tier annotation.
 func confTier(s string) string {
 	switch s {
-	case "exact":
+	case strategyExact:
 		return "\u2713\u2713\u2713"
-	case "whitespace_fuzzy":
+	case strategyWhitespaceFuzzy:
 		return "\u2713\u2713"
-	case "line_fuzzy":
+	case strategyLineFuzzy:
 		return "\u2713\u2713"
-	case "substring_fuzzy":
+	case strategySubstringFuzzy:
 		return "\u2713"
-	case "insert":
+	case strategyInsert:
 		return "(new)"
 	default:
 		return ""

@@ -1,3 +1,4 @@
+// Package toolstats provides the tool_stats MCP tool: usage telemetry across all projects.
 package toolstats
 
 import (
@@ -14,16 +15,33 @@ import (
 	"github.com/hedtahr/grepfunc/server"
 )
 
+// Tool is the tool_stats MCP tool definition.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "tool_stats",
-	Description: "Show usage telemetry across ALL projects: how often each tool was called (call count, error rate, avg duration) and which registered tools were never called. Read-only audit of model tool adoption — the feedback loop for deciding which tools to keep, merge, or drop. Recorded globally to the user cache dir (grepfunc/toolstats.log). Pass path to filter to one project.",
+	Name: "tool_stats",
+	Description: "Show usage telemetry across ALL projects: how often each tool was called " +
+		"(call count, error rate, avg duration) and which registered tools were never called. " +
+		"Read-only audit of model tool adoption — the feedback loop for deciding which tools to keep, " +
+		"merge, or drop. Recorded globally to the user cache dir (grepfunc/toolstats.log). " +
+		"Pass path to filter to one project.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":    {Type: "string", Description: "Project directory to filter telemetry to. Optional — omit for a global view across all projects."},
-			"compact": {Type: "boolean", Description: "Terse output: one line per tool, no header. Default false."},
+			"path": {
+				Type: "string",
+				Description: "Project directory to filter telemetry to. " +
+					"Optional — omit for a global view across all projects.",
+				Items: nil,
+			},
+			"compact": {
+				Type:        "boolean",
+				Description: "Terse output: one line per tool, no header. Default false.",
+				Items:       nil,
+			},
 		},
-		Required: []string{},
+		Required:             []string{},
+		AdditionalProperties: false,
 	},
 }
 
@@ -41,51 +59,53 @@ type toolAgg struct {
 	last     time.Time
 }
 
+const (
+	typeText     = "text"
+	percent      = 100
+	minLogFields = 5
+)
+
+// Handle serves the tool_stats MCP tool.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a args
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
+	var input args
+
+	err := json.Unmarshal(raw, &input)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
+
 	var filter string
-	if a.Path != "" {
-		filter = server.ResolvePath(a.Path)
+	if input.Path != "" {
+		filter = server.ResolvePath(input.Path)
 	} else if server.ProjectRoot != "" && server.ProjectRoot != "." {
 		filter = server.ProjectRoot
 	}
+
 	path := server.StatsLogPath()
 
-	if _, err := os.Stat(path); err != nil {
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("No telemetry yet. Tool calls are recorded to %s automatically.", path)}},
-		}, nil
+	_, statErr := os.Stat(path)
+	if statErr == nil {
+		return renderTelemetry(path, filter, input.Compact)
 	}
 
+	if !os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("stat stats log: %w", statErr)
+	}
+
+	return textResult(fmt.Sprintf("No telemetry yet. Tool calls are recorded to %s automatically.", path)), nil
+}
+
+// renderTelemetry builds the full or compact stats report for the log file.
+func renderTelemetry(path, filter string, compact bool) (*server.ToolCallResult, error) {
 	aggs, registered, projects, err := parseLog(path, filter)
 	if err != nil {
 		return nil, err
 	}
 
+	sorted := sortAggs(aggs)
+	totalCalls, totalErrs, first, last := totals(sorted)
+
 	var buf strings.Builder
-	totalCalls, totalErrs := 0, 0
-	var first, last time.Time
-	sorted := make([]*toolAgg, 0, len(aggs))
-	for _, ag := range aggs {
-		totalCalls += ag.calls
-		totalErrs += ag.errs
-		if first.IsZero() || ag.first.Before(first) {
-			first = ag.first
-		}
-		if last.IsZero() || ag.last.After(last) {
-			last = ag.last
-		}
-		sorted = append(sorted, ag)
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].calls != sorted[j].calls {
-			return sorted[i].calls > sorted[j].calls
-		}
-		return sorted[i].name < sorted[j].name
-	})
 
 	if filter != "" {
 		fmt.Fprintf(&buf, "Project: %s\n", filter)
@@ -93,121 +113,235 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		fmt.Fprintf(&buf, "Projects: %d\n", len(projects))
 	}
 
-	if a.Compact {
-		for _, ag := range sorted {
-			fmt.Fprintf(&buf, "%s: %d calls, %d err, %dms avg\n", ag.name, ag.calls, ag.errs, avgMs(ag))
-		}
-	} else {
-		errRate := 0.0
-		if totalCalls > 0 {
-			errRate = 100 * float64(totalErrs) / float64(totalCalls)
-		}
-		fmt.Fprintf(&buf, "Tool usage — %d calls, %d errors (%.1f%%)\n", totalCalls, totalErrs, errRate)
-		if !first.IsZero() {
-			fmt.Fprintf(&buf, "Range: %s → %s\n", first.Format(time.RFC3339), last.Format(time.RFC3339))
-		}
-		fmt.Fprintf(&buf, "\n%-20s %6s %6s %6s %9s\n", "tool", "calls", "errors", "err%", "avg(ms)")
-		for _, ag := range sorted {
-			e := 0.0
-			if ag.calls > 0 {
-				e = 100 * float64(ag.errs) / float64(ag.calls)
-			}
-			fmt.Fprintf(&buf, "%-20s %6d %6d %5.1f%% %9d\n", ag.name, ag.calls, ag.errs, e, avgMs(ag))
-		}
+	renderBody(&buf, sorted, totalCalls, totalErrs, first, last, compact)
+
+	uncalled := uncalledTools(registered, aggs, compact)
+	if uncalled != "" {
+		buf.WriteString(uncalled)
 	}
 
-	var uncalled []string
-	for _, r := range registered {
-		if _, ok := aggs[r]; !ok {
-			uncalled = append(uncalled, r)
-		}
-	}
-	sort.Strings(uncalled)
-	if len(uncalled) > 0 {
-		if a.Compact {
-			fmt.Fprintf(&buf, "\nnever: %s\n", strings.Join(uncalled, ", "))
-		} else {
-			fmt.Fprintf(&buf, "\nNever called (%d): %s\n", len(uncalled), strings.Join(uncalled, ", "))
-		}
-	}
-
-	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
-	}, nil
+	return textResult(buf.String()), nil
 }
 
-func avgMs(a *toolAgg) int {
-	if a.calls == 0 {
+func textResult(text string) *server.ToolCallResult {
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: typeText, Text: text}},
+		IsError: false,
+	}
+}
+
+// sortAggs returns aggregations ordered by call count (desc), then name.
+func sortAggs(aggs map[string]*toolAgg) []*toolAgg {
+	sorted := make([]*toolAgg, 0, len(aggs))
+	for _, agg := range aggs {
+		sorted = append(sorted, agg)
+	}
+
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].calls != sorted[j].calls {
+			return sorted[i].calls > sorted[j].calls
+		}
+
+		return sorted[i].name < sorted[j].name
+	})
+
+	return sorted
+}
+
+// totals sums call/error counts and the observed time range across aggregations.
+func totals(sorted []*toolAgg) (int, int, time.Time, time.Time) {
+	var (
+		totalCalls int
+		totalErrs  int
+		first      time.Time
+		last       time.Time
+	)
+
+	for _, agg := range sorted {
+		totalCalls += agg.calls
+		totalErrs += agg.errs
+
+		if first.IsZero() || agg.first.Before(first) {
+			first = agg.first
+		}
+
+		if last.IsZero() || agg.last.After(last) {
+			last = agg.last
+		}
+	}
+
+	return totalCalls, totalErrs, first, last
+}
+
+// renderBody writes the per-tool table in compact or full form.
+func renderBody(
+	buf *strings.Builder, sorted []*toolAgg, totalCalls, totalErrs int, first, last time.Time, compact bool,
+) {
+	if compact {
+		for _, agg := range sorted {
+			fmt.Fprintf(buf, "%s: %d calls, %d err, %dms avg\n", agg.name, agg.calls, agg.errs, avgMs(agg))
+		}
+
+		return
+	}
+
+	errRate := 0.0
+	if totalCalls > 0 {
+		errRate = percent * float64(totalErrs) / float64(totalCalls)
+	}
+
+	fmt.Fprintf(buf, "Tool usage — %d calls, %d errors (%.1f%%)\n", totalCalls, totalErrs, errRate)
+
+	if !first.IsZero() {
+		fmt.Fprintf(buf, "Range: %s → %s\n", first.Format(time.RFC3339), last.Format(time.RFC3339))
+	}
+
+	fmt.Fprintf(buf, "\n%-20s %6s %6s %6s %9s\n",
+		"tool", "calls", "errors", "err%", "avg(ms)")
+
+	for _, agg := range sorted {
+		rate := 0.0
+		if agg.calls > 0 {
+			rate = percent * float64(agg.errs) / float64(agg.calls)
+		}
+
+		fmt.Fprintf(buf, "%-20s %6d %6d %5.1f%% %9d\n", agg.name, agg.calls, agg.errs, rate, avgMs(agg))
+	}
+}
+
+// uncalledTools lists registered tools with no recorded calls, or "" when all were called.
+func uncalledTools(registered []string, aggs map[string]*toolAgg, compact bool) string {
+	var uncalled []string
+
+	for _, reg := range registered {
+		if _, ok := aggs[reg]; !ok {
+			uncalled = append(uncalled, reg)
+		}
+	}
+
+	sort.Strings(uncalled)
+
+	if len(uncalled) == 0 {
+		return ""
+	}
+
+	var buf strings.Builder
+
+	if compact {
+		fmt.Fprintf(&buf, "\nnever: %s\n", strings.Join(uncalled, ", "))
+	} else {
+		fmt.Fprintf(&buf, "\nNever called (%d): %s\n", len(uncalled), strings.Join(uncalled, ", "))
+	}
+
+	return buf.String()
+}
+
+func avgMs(agg *toolAgg) int {
+	if agg.calls == 0 {
 		return 0
 	}
-	return int(a.totalDur.Milliseconds() / int64(a.calls))
+
+	return int(agg.totalDur.Milliseconds() / int64(agg.calls))
 }
 
+// parseLog reads the telemetry log, filtering lines to the given project when set.
 func parseLog(path, filter string) (map[string]*toolAgg, []string, map[string]int, error) {
-	f, err := os.Open(path)
+	// #nosec G304 -- paths bounds-checked by server
+	file, err := os.Open(path)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("open stats log: %w", err)
 	}
-	defer f.Close()
+
+	defer func() { _ = file.Close() }()
 
 	aggs := map[string]*toolAgg{}
 	projects := map[string]int{}
+
 	var registered []string
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
 		if rest, ok := strings.CutPrefix(line, "# registered: "); ok {
 			registered = strings.Split(rest, ",")
+
 			continue
 		}
+
 		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
 			continue
 		}
-		parts := strings.Split(line, "\t")
-		if len(parts) < 5 {
-			continue
-		}
-		if !projMatch(parts[1], filter) {
-			continue
-		}
-		ts, err := time.Parse(time.RFC3339, parts[0])
-		if err != nil {
-			continue
-		}
-		projects[parts[1]]++
-		tool := parts[2]
-		isErr := parts[3] == "err"
-		durMs, _ := strconv.Atoi(parts[4])
 
-		ag := aggs[tool]
-		if ag == nil {
-			ag = &toolAgg{name: tool, first: ts, last: ts}
-			aggs[tool] = ag
+		tool, isErr, durMs, when, project, ok := parseLogLine(line, filter)
+		if !ok {
+			continue
 		}
-		ag.calls++
-		if isErr {
-			ag.errs++
+
+		projects[project]++
+
+		agg := aggs[tool]
+		if agg == nil {
+			agg = &toolAgg{name: tool, first: when, last: when, calls: 0, errs: 0, totalDur: 0}
+			aggs[tool] = agg
 		}
-		ag.totalDur += time.Duration(durMs) * time.Millisecond
-		if ts.Before(ag.first) {
-			ag.first = ts
-		}
-		if ts.After(ag.last) {
-			ag.last = ts
-		}
+
+		agg.observe(when, isErr, durMs)
 	}
-	if err := sc.Err(); err != nil {
-		return nil, nil, nil, err
+
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		return nil, nil, nil, fmt.Errorf("read stats log: %w", scanErr)
 	}
+
 	return aggs, registered, projects, nil
+}
+
+// parseLogLine parses one data line, or ok=false when malformed or filtered out.
+func parseLogLine(line, filter string) (string, bool, int, time.Time, string, bool) {
+	parts := strings.Split(line, "\t")
+	if len(parts) < minLogFields {
+		return "", false, 0, time.Time{}, "", false
+	}
+
+	if !projMatch(parts[1], filter) {
+		return "", false, 0, time.Time{}, "", false
+	}
+
+	when, err := time.Parse(time.RFC3339, parts[0])
+	if err != nil {
+		return "", false, 0, time.Time{}, "", false
+	}
+
+	durMs, _ := strconv.Atoi(parts[4])
+
+	return parts[2], parts[3] == "err", durMs, when, parts[1], true
+}
+
+// observe folds one log line into the aggregation.
+func (agg *toolAgg) observe(when time.Time, isErr bool, durMs int) {
+	agg.calls++
+	if isErr {
+		agg.errs++
+	}
+
+	agg.totalDur += time.Duration(durMs) * time.Millisecond
+	if when.Before(agg.first) {
+		agg.first = when
+	}
+
+	if when.After(agg.last) {
+		agg.last = when
+	}
 }
 
 func projMatch(proj, filter string) bool {
 	if filter == "" {
 		return true
 	}
+
 	if proj == filter {
 		return true
 	}
+
 	return strings.HasPrefix(proj, filter+string(filepath.Separator))
 }

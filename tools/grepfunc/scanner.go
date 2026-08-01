@@ -1,14 +1,30 @@
+// Package grepfunc scans source trees for function and type blocks.
 package grepfunc
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/hedtahr/grepfunc/server"
+)
+
+// Constants for the brace-counting state machine and search caps.
+const (
+	searchBothFactor = 2
+	initialStackCap  = 16
+
+	stateCode         = 0 // code context
+	stateDoubleQuote  = 1
+	stateSingleQuote  = 2
+	stateBacktick     = 3
+	stateLineComment  = 4
+	stateBlockComment = 5
 )
 
 // CompilePattern wraps a user pattern into a regex.
@@ -16,98 +32,141 @@ func CompilePattern(pattern string, caseSensitive bool) (*regexp.Regexp, error) 
 	if !caseSensitive {
 		pattern = "(?i)" + pattern
 	}
-	return regexp.Compile(pattern)
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("compile regex %q: %w", pattern, err)
+	}
+
+	return re, nil
 }
 
 // Search walks the directory tree, finds matching files, and extracts blocks.
 // sigFn detects whether a line starts a code block (function, struct, class, etc).
-func Search(root, glob string, pattern *regexp.Regexp, max int, sigFn func([]byte) bool) ([]FuncMatch, error) {
-	var results []FuncMatch
-	var walkErr error
+func Search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+	var (
+		results []FuncMatch
+		walkErr error
+	)
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			walkErr = err
+
 			return err
 		}
-		if d.IsDir() {
-			base := d.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
+
+		if entry.IsDir() {
+			base := entry.Name()
+			if isSkippableDir(base) {
 				return filepath.SkipDir
 			}
+
 			return nil
 		}
 
-		if !d.Type().IsRegular() || server.IsBannedPath(path) {
-			return nil
-		}
-
-		rel, _ := filepath.Rel(root, path)
-		matched := MatchGlob(glob, rel)
-		if !matched {
-			return nil
-		}
-
-		// Skip binary/large files
-		info, err := d.Info()
-		if err != nil || info.Size() > 2*1024*1024 {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if IsBinaryExt(ext) {
-			return nil
-		}
-		// When glob is default "*", skip known non-source files
-		if glob == "*" && IsNonSourceExt(ext) {
-			return nil
-		}
-
-		remaining := max - len(results)
+		remaining := limit - len(results)
 		if remaining <= 0 {
 			return filepath.SkipAll
 		}
 
-		funcs, err := extractBlocks(path, pattern, remaining, sigFn)
+		funcs, err := searchFile(root, path, glob, entry, pattern, remaining, sigFn)
 		if err != nil {
-			return nil // skip files that can't be read
+			walkErr = err
+
+			return err
 		}
+
 		for i := range funcs {
 			funcs[i].File = path
 		}
+
 		results = append(results, funcs...)
+
 		return nil
 	})
 
 	if walkErr != nil && len(results) == 0 {
-		return nil, walkErr
+		return nil, fmt.Errorf("walk %s: %w", root, walkErr)
 	}
-	return results, err
+
+	if err != nil {
+		return results, fmt.Errorf("walk %s: %w", root, err)
+	}
+
+	return results, nil
+}
+
+// isSkippableDir reports whether a directory should be excluded from searches.
+func isSkippableDir(base string) bool {
+	return base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" ||
+		base == "__pycache__" || strings.HasPrefix(base, ".")
+}
+
+// searchFile extracts matching blocks from one regular file during a walk.
+func searchFile(root, path, glob string, entry fs.DirEntry, pattern *regexp.Regexp,
+	remaining int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
+		return nil, nil
+	}
+
+	rel, _ := filepath.Rel(root, path)
+
+	if !MatchGlob(glob, rel) {
+		return nil, nil
+	}
+
+	info, err := entry.Info()
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	if info.Size() > 2*1024*1024 {
+		return nil, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	if IsBinaryExt(ext) {
+		return nil, nil
+	}
+	// When glob is default "*", skip known non-source files
+	if glob == "*" && IsNonSourceExt(ext) {
+		return nil, nil
+	}
+
+	return extractBlocks(path, pattern, remaining, sigFn)
 }
 
 // SearchBoth finds funcs and types in a single walk.
-func SearchBoth(root, glob string, pattern *regexp.Regexp, max int) ([]FuncMatch, []FuncMatch, error) {
+func SearchBoth(root, glob string, pattern *regexp.Regexp, limit int) ([]FuncMatch, []FuncMatch, error) {
 	combined := func(line []byte) bool {
 		return IsFuncSig(line) || IsStructSig(line)
 	}
-	all, err := Search(root, glob, pattern, max*2, combined)
+
+	all, err := Search(root, glob, pattern, limit*searchBothFactor, combined)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	var funcs, types []FuncMatch
-	for _, m := range all {
-		firstLine := []byte(m.Body)
+
+	for _, match := range all {
+		firstLine := []byte(match.Body)
 		if nl := bytes.IndexByte(firstLine, '\n'); nl >= 0 {
 			firstLine = firstLine[:nl]
 		}
+
 		if IsFuncSig(firstLine) {
-			funcs = append(funcs, m)
+			funcs = append(funcs, match)
 		} else {
-			types = append(types, m)
+			types = append(types, match)
 		}
 	}
+
 	return funcs, types, nil
 }
 
+// IsBinaryExt reports whether ext is a known binary or archive file extension.
 func IsBinaryExt(ext string) bool {
 	switch ext {
 	case ".exe", ".dll", ".so", ".dylib", ".a", ".o", ".obj",
@@ -121,6 +180,7 @@ func IsBinaryExt(ext string) bool {
 		".lock", ".sum":
 		return true
 	}
+
 	return false
 }
 
@@ -130,6 +190,7 @@ func IsNonSourceExt(ext string) bool {
 	if ext == "" {
 		return false
 	}
+
 	switch ext {
 	case ".go", ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
 		".py", ".pyi", ".pyx",
@@ -149,6 +210,7 @@ func IsNonSourceExt(ext string) bool {
 		".dart":
 		return false
 	}
+
 	return true
 }
 
@@ -158,6 +220,7 @@ func MatchGlob(pattern, path string) bool {
 	// Fast path: no path separators in pattern → match against base name only
 	if !strings.ContainsAny(pattern, "/\\") {
 		matched, _ := filepath.Match(pattern, filepath.Base(path))
+
 		return matched
 	}
 
@@ -168,12 +231,13 @@ func MatchGlob(pattern, path string) bool {
 	return matchParts(patParts, pathParts)
 }
 
-func splitPath(p string) []string {
-	p = strings.TrimPrefix(filepath.ToSlash(p), "./")
-	if p == "" || p == "." {
+func splitPath(path string) []string {
+	path = strings.TrimPrefix(filepath.ToSlash(path), "./")
+	if path == "" || path == "." {
 		return nil
 	}
-	return strings.Split(p, "/")
+
+	return strings.Split(path, "/")
 }
 
 func matchParts(pat, path []string) bool {
@@ -181,15 +245,16 @@ func matchParts(pat, path []string) bool {
 		return len(path) == 0
 	}
 
-	p := pat[0]
+	part := pat[0]
 
-	if p == "**" {
+	if part == "**" {
 		// ** matches zero or more path components
 		for i := 0; i <= len(path); i++ {
 			if matchParts(pat[1:], path[i:]) {
 				return true
 			}
 		}
+
 		return false
 	}
 
@@ -197,39 +262,42 @@ func matchParts(pat, path []string) bool {
 		return false
 	}
 
-	matched, _ := filepath.Match(p, path[0])
+	matched, _ := filepath.Match(part, path[0])
 	if !matched {
 		return false
 	}
+
 	return matchParts(pat[1:], path[1:])
 }
 
 // extractBlocks returns all blocks (functions, structs, etc) in a file matching pattern.
-func extractBlocks(filePath string, pattern *regexp.Regexp, max int, sigFn func([]byte) bool) ([]FuncMatch, error) {
-	data, err := os.ReadFile(filePath)
+func extractBlocks(filePath string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+	data, err := os.ReadFile(filePath) // #nosec G304 -- paths bounds-checked by server
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", filePath, err)
 	}
+
 	lines := toLines(data)
 	if len(lines) == 0 {
 		return nil, nil
 	}
 
-	ext := strings.ToLower(filepath.Ext(filePath))
-	if ext == ".py" || ext == ".pyi" || ext == ".pyx" {
-		return extractBlocksIndent(lines, pattern, max, sigFn)
+	if isPythonExt(strings.ToLower(filepath.Ext(filePath))) {
+		return extractBlocksIndent(lines, pattern, limit, sigFn)
 	}
 
 	boundaries := mapBlockBoundaries(lines, sigFn)
 
 	// Find lines matching the pattern
 	var results []FuncMatch
+
 	seen := make(map[int]bool) // dedup by func start line
 
 	for lineIdx, line := range lines {
 		if !pattern.Match(line) {
 			continue
 		}
+
 		fnStart, ok := boundaries[lineIdx]
 		if !ok || seen[fnStart] {
 			continue
@@ -238,33 +306,40 @@ func extractBlocks(filePath string, pattern *regexp.Regexp, max int, sigFn func(
 		if !sigFn(lines[fnStart]) {
 			continue
 		}
+
 		seen[fnStart] = true
 
-		fm, err := buildFuncMatch(lines, fnStart)
-		if err != nil {
-			continue
-		}
-		results = append(results, *fm)
-		if len(results) >= max {
+		results = append(results, *buildFuncMatch(lines, fnStart))
+		if len(results) >= limit {
 			break
 		}
 	}
+
 	return results, nil
+}
+
+// isPythonExt reports whether ext belongs to a Python source file.
+func isPythonExt(ext string) bool {
+	return ext == ".py" || ext == ".pyi" || ext == ".pyx"
 }
 
 // toLines splits data into lines, preserving the line content without trailing \n or \r.
 func toLines(data []byte) [][]byte {
 	var lines [][]byte
+
 	start := 0
+
 	for i, b := range data {
 		if b == '\n' {
 			lines = append(lines, trimCR(data[start:i]))
 			start = i + 1
 		}
 	}
+
 	if start < len(data) {
 		lines = append(lines, trimCR(data[start:]))
 	}
+
 	return lines
 }
 
@@ -272,6 +347,7 @@ func trimCR(b []byte) []byte {
 	if len(b) > 0 && b[len(b)-1] == '\r' {
 		return b[:len(b)-1]
 	}
+
 	return b
 }
 
@@ -281,7 +357,6 @@ type fnEntry struct {
 	bodyDepth int // brace depth just before opening brace (-1 if not yet found)
 }
 
-// mapBlockBoundaries identifies all block definitions and returns a map from
 // MapBlockBoundaries maps every line index in a file to the start line of the innermost
 // function/type/struct/class block that contains it, using sigFn to detect block signatures.
 func MapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
@@ -291,10 +366,10 @@ func MapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
 // line index → inner-most block start line index.
 func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
 	boundaries := make(map[int]int)
-	stack := make([]fnEntry, 0, 16)
+	stack := make([]fnEntry, 0, initialStackCap)
 	depth := 0
 
-	for i, line := range lines {
+	for lineIdx, line := range lines {
 		depthBefore := depth
 		opens, closes := braceDelta(line)
 		depth = depthBefore + opens - closes
@@ -303,10 +378,10 @@ func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
 		if sigFn(line) {
 			if opens > 0 {
 				// Signature + opening brace on same line: bodyDepth = depth before signature
-				stack = append(stack, fnEntry{startLine: i, bodyDepth: depthBefore})
+				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: depthBefore})
 			} else {
 				// Signature without brace; bodyDepth set when brace found
-				stack = append(stack, fnEntry{startLine: i, bodyDepth: -1})
+				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: -1})
 			}
 		}
 
@@ -316,30 +391,41 @@ func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
 		}
 
 		// Check if any functions ended (depth returned to bodyDepth)
-		for len(stack) > 0 && stack[len(stack)-1].bodyDepth >= 0 && depth == stack[len(stack)-1].bodyDepth {
-			top := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			// Map only unclaimed lines (inner functions keep their mapping)
-			for j := top.startLine; j <= i; j++ {
-				if _, exists := boundaries[j]; !exists {
-					boundaries[j] = top.startLine
-				}
-			}
-		}
+		stack = closeEndedBlocks(stack, lineIdx, depth, boundaries)
 	}
 
-	// Unterminated functions at EOF: close them at last line
-	for k := len(stack) - 1; k >= 0; k-- {
-		if stack[k].bodyDepth >= 0 {
-			for j := stack[k].startLine; j < len(lines); j++ {
-				if _, exists := boundaries[j]; !exists {
-					boundaries[j] = stack[k].startLine
-				}
-			}
-		}
-	}
+	closeUnterminated(stack, len(lines), boundaries)
 
 	return boundaries
+}
+
+// closeEndedBlocks pops functions whose body closed at line i, mapping their lines.
+func closeEndedBlocks(stack []fnEntry, i, depth int, boundaries map[int]int) []fnEntry {
+	for len(stack) > 0 && stack[len(stack)-1].bodyDepth >= 0 && depth == stack[len(stack)-1].bodyDepth {
+		top := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		// Map only unclaimed lines (inner functions keep their mapping)
+		for j := top.startLine; j <= i; j++ {
+			if _, exists := boundaries[j]; !exists {
+				boundaries[j] = top.startLine
+			}
+		}
+	}
+
+	return stack
+}
+
+// closeUnterminated maps functions left open at EOF to the last line.
+func closeUnterminated(stack []fnEntry, lineCount int, boundaries map[int]int) {
+	for _, v := range slices.Backward(stack) {
+		if v.bodyDepth >= 0 {
+			for j := v.startLine; j < lineCount; j++ {
+				if _, exists := boundaries[j]; !exists {
+					boundaries[j] = v.startLine
+				}
+			}
+		}
+	}
 }
 
 // EnclosingSymbol returns the name of the function/type that encloses lineIdx (0-based).
@@ -348,173 +434,224 @@ func EnclosingSymbol(lines [][]byte, lineIdx int, boundaries map[int]int) string
 	if !ok {
 		return ""
 	}
+
 	return extractFuncName(string(lines[start]))
 }
 
-func buildFuncMatch(lines [][]byte, fnStart int) (*FuncMatch, error) {
+func buildFuncMatch(lines [][]byte, fnStart int) *FuncMatch {
 	depth := 0
 	started := false
+
 	fnEnd := len(lines) - 1
-	for j := fnStart; j < len(lines); j++ {
-		opens, closes := braceDelta(lines[j])
+
+	for lineIdx := fnStart; lineIdx < len(lines); lineIdx++ {
+		opens, closes := braceDelta(lines[lineIdx])
 		if opens > 0 {
 			started = true
 		}
+
 		depth += opens - closes
 		if started && depth == 0 {
-			fnEnd = j
+			fnEnd = lineIdx
+
 			break
 		}
 	}
+
 	name := extractFuncName(string(lines[fnStart]))
+
 	var body bytes.Buffer
-	for j := fnStart; j <= fnEnd; j++ {
-		if j > fnStart {
+
+	for lineIdx := fnStart; lineIdx <= fnEnd; lineIdx++ {
+		if lineIdx > fnStart {
 			body.WriteByte('\n')
 		}
-		body.Write(lines[j])
+
+		body.Write(lines[lineIdx])
 	}
+
 	return &FuncMatch{
 		Line:    fnStart + 1,
 		EndLine: fnEnd + 1,
 		Name:    name,
 		Lines:   fnEnd - fnStart + 1,
 		Body:    body.String(),
-	}, nil
+		File:    "",
+		Kind:    "",
+	}
 }
 
 // braceDelta counts { and } in a line, skipping strings and comments.
 // Uses a simple state machine DFA.
-func braceDelta(line []byte) (opens, closes int) {
-	state := byte(0) // 0=code, 1=double-str, 2=single-str, 3=backtick-str, 4=line-comment, 5=block-comment
-	// Note: line-comment can only start within code context
+func braceDelta(line []byte) (int, int) {
+	opens, closes := 0, 0
+	state := byte(stateCode)
 
-	for i := 0; i < len(line); i++ {
-		c := line[i]
+	for idx := 0; idx < len(line); idx++ {
+		done := false
+
 		switch state {
-		case 0: // code
-			switch c {
-			case '{':
-				opens++
-			case '}':
-				closes++
-			case '"':
-				state = 1
-			case '\'':
-				state = 2
-			case '`':
-				state = 3
+		case stateCode:
+			opens, closes, state, idx, done = scanCodeChar(line, idx, opens, closes)
+		case stateDoubleQuote:
+			state, idx = scanQuotedChar(line, idx, stateDoubleQuote, '"', true)
+		case stateSingleQuote:
+			state, idx = scanQuotedChar(line, idx, stateSingleQuote, '\'', true)
+		case stateBacktick:
+			state, idx = scanQuotedChar(line, idx, stateBacktick, '`', false)
+		case stateBlockComment:
+			state, idx = scanBlockCommentChar(line, idx)
+		}
+
+		if done {
+			return opens, closes
+		}
+	}
+
+	return opens, closes
+}
+
+// scanCodeChar handles one char in code context, updating brace counts and state.
+func scanCodeChar(line []byte, idx, opens, closes int) (int, int, byte, int, bool) {
+	switch line[idx] {
+	case '{':
+		opens++
+	case '}':
+		closes++
+	case '"':
+		return opens, closes, stateDoubleQuote, idx, false
+	case '\'':
+		return opens, closes, stateSingleQuote, idx, false
+	case '`':
+		return opens, closes, stateBacktick, idx, false
+	case '/':
+		if idx+1 < len(line) {
+			switch line[idx+1] {
 			case '/':
-				if i+1 < len(line) {
-					next := line[i+1]
-					if next == '/' {
-						return // rest of line is comment
-					}
-					if next == '*' {
-						state = 5
-						i++ // skip *
-					}
-				}
-			}
-		case 1: // double-quoted string
-			switch c {
-			case '\\':
-				i++ // skip next char
-			case '"':
-				state = 0
-			}
-		case 2: // single-quoted string
-			switch c {
-			case '\\':
-				i++
-			case '\'':
-				state = 0
-			}
-		case 3: // backtick string
-			if c == '`' {
-				state = 0
-			}
-		case 5: // block comment
-			if c == '*' && i+1 < len(line) && line[i+1] == '/' {
-				state = 0
-				i++ // skip /
+				return opens, closes, stateLineComment, idx, true
+			case '*':
+				return opens, closes, stateBlockComment, idx + 1, false
 			}
 		}
 	}
-	return
+
+	return opens, closes, stateCode, idx, false
 }
 
-func insideQuote(s string, idx int) bool {
-	dq := 0
-	for i := 0; i < idx; i++ {
-		if s[i] == '\\' && i+1 < idx {
-			i++
+// scanQuotedChar handles one char inside a quoted string, honoring escapes when enabled.
+func scanQuotedChar(line []byte, idx int, state byte, quote byte, escapes bool) (byte, int) {
+	c := line[idx]
+	if escapes && c == '\\' && idx+1 < len(line) {
+		return state, idx + 1
+	}
+
+	if c == quote {
+		return stateCode, idx
+	}
+
+	return state, idx
+}
+
+// scanBlockCommentChar handles one char inside a block comment, exiting at */.
+func scanBlockCommentChar(line []byte, i int) (byte, int) {
+	if line[i] == '*' && i+1 < len(line) && line[i+1] == '/' {
+		return stateCode, i + 1
+	}
+
+	return stateBlockComment, i
+}
+
+func insideQuote(str string, idx int) bool {
+	quoteCount := 0
+
+	for pos := 0; pos < idx; pos++ {
+		if str[pos] == '\\' && pos+1 < idx {
+			pos++
+
 			continue
 		}
-		if s[i] == '"' {
-			dq++
+
+		if str[pos] == '"' {
+			quoteCount++
 		}
 	}
-	return dq%2 == 1
+
+	return quoteCount%2 == 1
 }
 
-// IsFuncSig checks if a line looks like a function/method definition.
 // IsStructSig detects struct/class/interface/enum/type definition signatures.
 // Matches: Go, Rust, TS/JS, Java, C/C++, C#, Python, Kotlin, Swift, etc.
 func IsStructSig(line []byte) bool {
-	s := strings.TrimSpace(string(line))
-	if s == "" || s[0] == '#' || s[0] == '/' || s[0] == '*' {
-		return false
-	}
-	if !strings.ContainsAny(s, "{:") {
+	sig := strings.TrimSpace(string(line))
+	if sig == "" || isCommentStart(sig) {
 		return false
 	}
 
-	// Go: type Name struct {, type Name interface {
-	if strings.HasPrefix(s, "type ") && (strings.Contains(s, " struct ") || strings.Contains(s, " struct{") ||
-		strings.Contains(s, " interface ") || strings.Contains(s, " interface{")) {
+	if !strings.ContainsAny(sig, "{:") {
+		return false
+	}
+
+	if isGoTypeDecl(sig) || isRustTypeDecl(sig) || isPythonClass(sig) || isJSTypeDecl(sig) {
 		return true
 	}
 
-	// Rust: struct Name {, enum Name {, trait Name {, impl Name {, impl Trait for Name {
-	if strings.HasPrefix(s, "struct ") || strings.HasPrefix(s, "enum ") ||
+	return isModifierTypeDecl(stripTypeModifiers(sig))
+}
+
+// isCommentStart reports whether s starts with a comment or directive marker.
+func isCommentStart(s string) bool {
+	return s[0] == '#' || s[0] == '/' || s[0] == '*'
+}
+
+// isGoTypeDecl matches Go declarations like "type Name struct {".
+func isGoTypeDecl(s string) bool {
+	return strings.HasPrefix(s, "type ") && (strings.Contains(s, " struct ") || strings.Contains(s, " struct{") ||
+		strings.Contains(s, " interface ") || strings.Contains(s, " interface{"))
+}
+
+// isRustTypeDecl matches Rust struct/enum/trait/impl declarations.
+func isRustTypeDecl(s string) bool {
+	return strings.HasPrefix(s, "struct ") || strings.HasPrefix(s, "enum ") ||
 		strings.HasPrefix(s, "trait ") || strings.HasPrefix(s, "impl ") ||
 		strings.HasPrefix(s, "pub struct ") || strings.HasPrefix(s, "pub enum ") ||
-		strings.HasPrefix(s, "pub trait ") || strings.HasPrefix(s, "pub impl ") {
-		return true
-	}
+		strings.HasPrefix(s, "pub trait ") || strings.HasPrefix(s, "pub impl ")
+}
 
-	// Python: class Name: or class Name(Base):
-	if strings.HasPrefix(s, "class ") && strings.HasSuffix(s, ":") {
-		return true
-	}
+// isPythonClass matches "class Name:" declarations.
+func isPythonClass(s string) bool {
+	return strings.HasPrefix(s, "class ") && strings.HasSuffix(s, ":")
+}
 
-	// JS/TS: class Name {, interface Name {, type Name = {
-	if strings.HasPrefix(s, "class ") || strings.HasPrefix(s, "interface ") ||
+// isJSTypeDecl matches JS/TS class/interface/type-alias declarations.
+func isJSTypeDecl(s string) bool {
+	return strings.HasPrefix(s, "class ") || strings.HasPrefix(s, "interface ") ||
 		(strings.HasPrefix(s, "type ") && strings.Contains(s, "=")) ||
 		strings.HasPrefix(s, "export class ") || strings.HasPrefix(s, "export interface ") ||
 		strings.HasPrefix(s, "export type ") || strings.HasPrefix(s, "export default class ") ||
-		strings.HasPrefix(s, "abstract class ") {
-		return true
-	}
+		strings.HasPrefix(s, "abstract class ")
+}
 
-	// Java/C#/Kotlin/Swift: class/interface/enum/record/data class
+// stripTypeModifiers removes visibility/static keywords from the start of sig.
+func stripTypeModifiers(sig string) string {
 	modifiers := []string{"public ", "private ", "protected ", "internal ", "static ", "abstract ",
 		"sealed ", "final ", "open ", "data ", "override ", "export "}
 	for _, mod := range modifiers {
-		s = strings.TrimPrefix(s, mod)
+		sig = strings.TrimPrefix(sig, mod)
 	}
 
-	if strings.HasPrefix(s, "class ") || strings.HasPrefix(s, "interface ") ||
+	return sig
+}
+
+// isModifierTypeDecl matches class-like declarations after modifiers were stripped.
+func isModifierTypeDecl(s string) bool {
+	return strings.HasPrefix(s, "class ") || strings.HasPrefix(s, "interface ") ||
 		strings.HasPrefix(s, "enum ") || strings.HasPrefix(s, "enum class ") ||
 		strings.HasPrefix(s, "record ") || strings.HasPrefix(s, "object ") ||
 		strings.HasPrefix(s, "struct ") || strings.HasPrefix(s, "protocol ") ||
-		strings.HasPrefix(s, "extension ") || strings.HasPrefix(s, "actor ") {
-		return true
-	}
-
-	return false
+		strings.HasPrefix(s, "extension ") || strings.HasPrefix(s, "actor ")
 }
+
+// IsFuncSig checks if a line looks like a function/method definition.
 func IsFuncSig(line []byte) bool {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {
@@ -525,118 +662,122 @@ func IsFuncSig(line []byte) bool {
 		return false
 	}
 
-	s := string(trimmed)
+	return isFuncSigStart(string(trimmed))
+}
 
+// isFuncSigStart checks a trimmed signature line for function markers.
+func isFuncSigStart(sig string) bool {
 	// Reject multi-line signature continuations and body lines
-	if s[0] == ')' || s[0] == ',' || s[0] == ']' || s[0] == '{' || s[0] == '}' {
+	if sig[0] == ')' || sig[0] == ',' || sig[0] == ']' || sig[0] == '{' || sig[0] == '}' {
 		return false
 	}
 
 	// Must contain opening paren (function parameter list)
-	if !strings.Contains(s, "(") {
+	if !strings.Contains(sig, "(") {
 		return false
 	}
 
-	// Go: func (optional receiver) Name(
-	if strings.HasPrefix(s, "func ") || strings.HasPrefix(s, "func(") {
-		return true
-	}
-
-	// Rust: fn name<...>( or pub fn name(
-	if strings.HasPrefix(s, "fn ") || strings.HasPrefix(s, "pub fn ") ||
-		strings.HasPrefix(s, "pub(crate) fn ") || strings.HasPrefix(s, "pub(super) fn ") {
-		return true
-	}
-
-	// Python: def name( or async def name(
-	if strings.HasPrefix(s, "def ") || strings.HasPrefix(s, "async def ") {
-		return true
-	}
-
-	// JavaScript/TypeScript: function keyword followed by optional space then (
-	// Avoid matching "function(" inside string literals (e.g. format strings)
-	if strings.HasPrefix(s, "function ") || strings.HasPrefix(s, "function(") {
-		return true
-	}
-	for _, pat := range []string{" function(", " function ("} {
-		idx := strings.Index(s, pat)
-		if idx >= 0 && !insideQuote(s, idx) {
-			return true
-		}
-	}
-
-	// JS/TS arrow functions assigned to name: const/let/var name = (...) => {
-	if (strings.HasPrefix(s, "const ") || strings.HasPrefix(s, "let ") || strings.HasPrefix(s, "var ")) &&
-		(strings.Contains(s, "=>") || (strings.Contains(s, "= (") && strings.Contains(s, "{"))) {
+	if isLangFuncKeyword(sig) || hasFuncKeyword(sig) || isAnonFuncAssign(sig) {
 		return true
 	}
 
 	// Strip visibility/lifetime modifiers unconditionally
-	s = strings.TrimPrefix(s, "public ")
-	s = strings.TrimPrefix(s, "private ")
-	s = strings.TrimPrefix(s, "protected ")
-	s = strings.TrimPrefix(s, "static ")
-	s = strings.TrimPrefix(s, "async ")
-	s = strings.TrimPrefix(s, "virtual ")
-	s = strings.TrimPrefix(s, "override ")
-	s = strings.TrimPrefix(s, "export ")
-	s = strings.TrimPrefix(s, "abstract ")
+	return looksLikeFuncStart(stripFuncModifiers(sig))
+}
 
-	return looksLikeFuncStart(s)
+// isLangFuncKeyword matches language function keywords at the start of sig.
+func isLangFuncKeyword(sig string) bool {
+	return strings.HasPrefix(sig, "func ") || strings.HasPrefix(sig, "func(") ||
+		strings.HasPrefix(sig, "fn ") || strings.HasPrefix(sig, "pub fn ") ||
+		strings.HasPrefix(sig, "pub(crate) fn ") || strings.HasPrefix(sig, "pub(super) fn ") ||
+		strings.HasPrefix(sig, "def ") || strings.HasPrefix(sig, "async def ") ||
+		strings.HasPrefix(sig, "function ") || strings.HasPrefix(sig, "function(")
+}
+
+// hasFuncKeyword finds " function(" or " function (" outside string literals.
+func hasFuncKeyword(sig string) bool {
+	for _, pat := range []string{" function(", " function ("} {
+		idx := strings.Index(sig, pat)
+		if idx >= 0 && !insideQuote(sig, idx) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isAnonFuncAssign matches JS/TS arrow functions assigned to a name.
+func isAnonFuncAssign(sig string) bool {
+	return (strings.HasPrefix(sig, "const ") || strings.HasPrefix(sig, "let ") || strings.HasPrefix(sig, "var ")) &&
+		(strings.Contains(sig, "=>") || (strings.Contains(sig, "= (") && strings.Contains(sig, "{")))
+}
+
+// stripFuncModifiers removes visibility/lifetime modifiers from the start of sig.
+func stripFuncModifiers(sig string) string {
+	sig = strings.TrimPrefix(sig, "public ")
+	sig = strings.TrimPrefix(sig, "private ")
+	sig = strings.TrimPrefix(sig, "protected ")
+	sig = strings.TrimPrefix(sig, "static ")
+	sig = strings.TrimPrefix(sig, "async ")
+	sig = strings.TrimPrefix(sig, "virtual ")
+	sig = strings.TrimPrefix(sig, "override ")
+	sig = strings.TrimPrefix(sig, "export ")
+
+	return strings.TrimPrefix(sig, "abstract ")
 }
 
 // looksLikeFuncStart checks if remaining string after modifiers looks like a function.
-func looksLikeFuncStart(s string) bool {
-	// Constructor pattern: constructor( or className(
-	if strings.HasPrefix(s, "constructor(") || strings.HasPrefix(s, "constructor ") {
+func looksLikeFuncStart(sig string) bool {
+	if isConstructorStart(sig) {
 		return true
 	}
-	// Pattern: identifier (possibly with generics) followed by (
-	// Must NOT be control flow keywords
+
+	if isControlFlowStart(sig) {
+		return false
+	}
+
+	if isAssignmentStart(sig) {
+		return false
+	}
+
+	// Quick check: ends with { or has ( followed eventually by ) then { or :
+	return (strings.HasSuffix(strings.TrimSpace(sig), "{") ||
+		strings.HasSuffix(strings.TrimSpace(sig), ":")) &&
+		strings.Contains(sig, "(") &&
+		!strings.HasPrefix(sig, "if ") &&
+		!strings.HasPrefix(sig, "for ") &&
+		!strings.HasPrefix(sig, "while ")
+}
+
+// isConstructorStart matches constructor( or constructor-prefixed signatures.
+func isConstructorStart(s string) bool {
+	return strings.HasPrefix(s, "constructor(") || strings.HasPrefix(s, "constructor ")
+}
+
+// isControlFlowStart reports whether s starts with a control-flow keyword.
+func isControlFlowStart(s string) bool {
 	keywords := []string{"if ", "for ", "while ", "switch ", "catch ", "else ", "with ", "try(", "case "}
 	for _, kw := range keywords {
 		if strings.HasPrefix(s, kw) {
-			return false
+			return true
 		}
 	}
-	// Reject assignment statements that don't assign a function value.
-	// e.g. reject: s.Entries = append(...) but keep: inner := func() {
-	if (strings.Contains(s, " = ") || strings.Contains(s, " := ")) &&
+
+	return false
+}
+
+// isAssignmentStart reports whether s is a plain assignment, not a function value.
+func isAssignmentStart(s string) bool {
+	return (strings.Contains(s, " = ") || strings.Contains(s, " := ")) &&
 		!strings.Contains(s, " func(") && !strings.Contains(s, " func ") &&
-		!strings.Contains(s, "=>") {
-		return false
-	}
-	// Has a word followed by ( not preceded by these keywords
-	// Quick check: ends with { or has ( followed eventually by ) then { or :
-	return (strings.HasSuffix(strings.TrimSpace(s), "{") ||
-		strings.HasSuffix(strings.TrimSpace(s), ":")) &&
-		strings.Contains(s, "(") &&
-		!strings.HasPrefix(s, "if ") &&
-		!strings.HasPrefix(s, "for ") &&
-		!strings.HasPrefix(s, "while ")
+		!strings.Contains(s, "=>")
 }
 
 // extractFuncName pulls the function/method name from a signature line.
 func extractFuncName(sig string) string {
 	sig = strings.TrimSpace(sig)
-
-	// Strip known prefixes unconditionally
-	prefixes := []string{"export default function ", "pub(crate) fn ", "pub(super) fn ",
-		"export function ", "pub fn ", "async def ", "function ",
-		"protected ", "override ", "abstract ", "private ", "virtual ",
-		"static ", "async ", "export ", "const ", "func ", "def ",
-		"let ", "var ", "fn ", "type "}
-	for _, p := range prefixes {
-		sig = strings.TrimPrefix(sig, p)
-	}
-
-	// Go receiver: (r *Type) Name → strip receiver
-	if strings.HasPrefix(sig, "(") {
-		idx := strings.Index(sig, ")")
-		if idx >= 0 {
-			sig = strings.TrimSpace(sig[idx+1:])
-		}
-	}
+	sig = stripNamePrefixes(sig)
+	sig = stripReceiver(sig)
 
 	// Find the identifier before the first (
 	before, _, found := strings.Cut(sig, "(")
@@ -646,8 +787,10 @@ func extractFuncName(sig string) string {
 		if len(parts) > 0 {
 			return strings.TrimRight(parts[0], " \t\r\n{")
 		}
+
 		return sig
 	}
+
 	before = strings.TrimSpace(before)
 	if before == "" {
 		return "<anonymous>"
@@ -670,14 +813,49 @@ func extractFuncName(sig string) string {
 		}
 	}
 
-	// Arrow function: name = (...) => { or name: (...) => {
+	if name := arrowFuncName(sig); name != "" {
+		return name
+	}
+
+	return "<fn>"
+}
+
+// stripNamePrefixes removes language keywords from the start of a signature.
+func stripNamePrefixes(sig string) string {
+	prefixes := []string{"export default function ", "pub(crate) fn ", "pub(super) fn ",
+		"export function ", "pub fn ", "async def ", "function ",
+		"protected ", "override ", "abstract ", "private ", "virtual ",
+		"static ", "async ", "export ", "const ", "func ", "def ",
+		"let ", "var ", "fn ", "type "}
+	for _, p := range prefixes {
+		sig = strings.TrimPrefix(sig, p)
+	}
+
+	return sig
+}
+
+// stripReceiver removes a Go receiver like "(r *Type) Name" → "Name".
+func stripReceiver(sig string) string {
+	if strings.HasPrefix(sig, "(") {
+		if _, rest, found := strings.Cut(sig, ")"); found {
+			return strings.TrimSpace(rest)
+		}
+	}
+
+	return sig
+}
+
+// arrowFuncName extracts the name from arrow-function assignments like "name = (...) => {".
+func arrowFuncName(sig string) string {
 	if before, _, found := strings.Cut(sig, "="); found {
 		before = strings.TrimSpace(before)
-		parts = strings.Fields(before)
+
+		parts := strings.Fields(before)
 		if len(parts) > 0 {
 			return parts[len(parts)-1]
 		}
 	}
+
 	if before, _, found := strings.Cut(sig, ":"); found {
 		before = strings.TrimSpace(before)
 		if !strings.Contains(before, " ") {
@@ -685,74 +863,111 @@ func extractFuncName(sig string) string {
 		}
 	}
 
-	return "<fn>"
+	return ""
 }
 
 // extractBlocksIndent handles Python and other indent-based languages.
-func extractBlocksIndent(lines [][]byte, pattern *regexp.Regexp, max int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+func extractBlocksIndent(lines [][]byte, pattern *regexp.Regexp, limit int,
+	sigFn func([]byte) bool) ([]FuncMatch, error) {
 	var results []FuncMatch
+
 	seen := make(map[int]bool)
 
-	for i, line := range lines {
+	for lineIdx, line := range lines {
 		if !sigFn(line) {
 			continue
 		}
-		if seen[i] {
+
+		if seen[lineIdx] {
 			continue
 		}
+
 		sigIndent := countLeadingSpaces(line)
-		fnEnd := i
-		for j := i + 1; j < len(lines); j++ {
-			s := bytes.TrimRight(lines[j], " \t\r")
-			if len(s) == 0 {
-				fnEnd = j
-				continue
-			}
-			trimmed := bytes.TrimLeft(lines[j], " \t")
-			if len(trimmed) > 0 && trimmed[0] == '#' {
-				fnEnd = j
-				continue
-			}
-			if countLeadingSpaces(lines[j]) <= sigIndent {
-				break
-			}
-			fnEnd = j
-		}
-		matched := false
-		for j := i; j <= fnEnd; j++ {
-			if pattern.Match(lines[j]) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		fnEnd := findIndentBlockEnd(lines, lineIdx, sigIndent)
+
+		if !blockMatchesPattern(lines, lineIdx, fnEnd, pattern) {
 			continue
 		}
-		seen[i] = true
-		name := extractFuncName(string(lines[i]))
-		var body bytes.Buffer
-		for j := i; j <= fnEnd; j++ {
-			if j > i {
-				body.WriteByte('\n')
-			}
-			body.Write(lines[j])
-		}
+
+		seen[lineIdx] = true
+		name := extractFuncName(string(lines[lineIdx]))
+		body := joinBlock(lines, lineIdx, fnEnd)
+
 		results = append(results, FuncMatch{
-			Line:    i + 1,
+			Line:    lineIdx + 1,
 			EndLine: fnEnd + 1,
 			Name:    name,
-			Lines:   fnEnd - i + 1,
-			Body:    body.String(),
+			Lines:   fnEnd - lineIdx + 1,
+			Body:    body,
+			File:    "",
+			Kind:    "",
 		})
-		if len(results) >= max {
+		if len(results) >= limit {
 			break
 		}
 	}
+
 	return results, nil
+}
+
+// findIndentBlockEnd returns the last line index of the indented block starting at start.
+func findIndentBlockEnd(lines [][]byte, start, sigIndent int) int {
+	fnEnd := start
+
+	for lineIdx := start + 1; lineIdx < len(lines); lineIdx++ {
+		s := bytes.TrimRight(lines[lineIdx], " \t\r")
+		if len(s) == 0 {
+			fnEnd = lineIdx
+
+			continue
+		}
+
+		trimmed := bytes.TrimLeft(lines[lineIdx], " \t")
+		if len(trimmed) > 0 && trimmed[0] == '#' {
+			fnEnd = lineIdx
+
+			continue
+		}
+
+		if countLeadingSpaces(lines[lineIdx]) <= sigIndent {
+			break
+		}
+
+		fnEnd = lineIdx
+	}
+
+	return fnEnd
+}
+
+// blockMatchesPattern reports whether any line in [start, end] matches pattern.
+func blockMatchesPattern(lines [][]byte, start, end int, pattern *regexp.Regexp) bool {
+	for j := start; j <= end; j++ {
+		if pattern.Match(lines[j]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// joinBlock joins lines [start, end] into a single body string.
+func joinBlock(lines [][]byte, start, end int) string {
+	var body bytes.Buffer
+
+	for j := start; j <= end; j++ {
+		if j > start {
+			body.WriteByte('\n')
+		}
+
+		body.Write(lines[j])
+	}
+
+	return body.String()
 }
 
 func countLeadingSpaces(line []byte) int {
 	count := 0
+
 	for _, b := range line {
 		switch b {
 		case ' ':
@@ -763,5 +978,6 @@ func countLeadingSpaces(line []byte) int {
 			return count
 		}
 	}
+
 	return count
 }

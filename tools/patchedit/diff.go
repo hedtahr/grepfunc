@@ -4,28 +4,34 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-func unifiedDiff(old, new []byte, path string, diffCtx int) string {
-	if bytes.Equal(old, new) {
+const defaultDiffCtx = 3
+
+func unifiedDiff(old, newContent []byte, path string, diffCtx int) string {
+	if bytes.Equal(old, newContent) {
 		return "(no changes)\n"
 	}
 
 	if diffCtx < 0 {
 		diffCtx = 0
 	}
+
 	ctx := diffCtx
 	if ctx == 0 {
-		ctx = 3 // default
+		ctx = defaultDiffCtx
 	}
 
 	oldLines := strings.Split(string(old), "\n")
-	newLines := strings.Split(string(new), "\n")
+	newLines := strings.Split(string(newContent), "\n")
 
 	// Strip leading slash: prevents "--- a//absolute/path"
 	cleanPath := strings.TrimLeft(filepath.ToSlash(path), "/")
+
 	var buf bytes.Buffer
+
 	fmt.Fprintf(&buf, "--- a/%s\n+++ b/%s\n", cleanPath, cleanPath)
 
 	// Narrow to dirty region + context before LCS → O(k²) not O(n²)
@@ -41,60 +47,75 @@ func unifiedDiff(old, new []byte, path string, diffCtx int) string {
 
 	ops := buildDiffOps(oldLines, newLines)
 
-	i := 0
-	for i < len(ops) {
-		if ops[i].kind == ' ' {
-			i++
+	writeDiffHunks(&buf, ops, ctx)
+
+	return buf.String()
+}
+
+func writeDiffHunks(buf *bytes.Buffer, ops []diffOp, ctx int) {
+	idx := 0
+	for idx < len(ops) {
+		if ops[idx].kind == ' ' {
+			idx++
+
 			continue
 		}
-		start := max(i-ctx, 0)
-		for j := start; j < i; j++ {
+
+		start := max(idx-ctx, 0)
+
+		for j := start; j < idx; j++ {
 			if ops[j].kind == ' ' {
 				buf.WriteString(" " + ops[j].text + "\n")
 			}
 		}
+
 		sameCount := 0
-		hunkEnd := i
+
+		hunkEnd := idx
 		for hunkEnd < len(ops) {
 			if ops[hunkEnd].kind == ' ' {
 				sameCount++
 				if sameCount > ctx {
-					sameCount--
 					break
 				}
 			} else {
 				sameCount = 0
 			}
+
 			hunkEnd++
 		}
-		for j := i; j < hunkEnd; j++ {
+
+		for j := idx; j < hunkEnd; j++ {
 			buf.WriteByte(ops[j].kind)
 			buf.WriteString(ops[j].text + "\n")
 		}
-		i = hunkEnd
+
+		idx = hunkEnd
 	}
-	return buf.String()
 }
 
 func commonPrefixLines(a, b []string) int {
-	n := min(len(a), len(b))
-	for i := range n {
+	commonLen := min(len(a), len(b))
+	for i := range commonLen {
 		if a[i] != b[i] {
 			return i
 		}
 	}
-	return n
+
+	return commonLen
 }
 
 func commonSuffixLines(a, b []string) int {
 	la, lb := len(a), len(b)
-	n := min(la, lb)
-	for i := range n {
+
+	commonLen := min(la, lb)
+	for i := range commonLen {
 		if a[la-1-i] != b[lb-1-i] {
 			return i
 		}
 	}
-	return n
+
+	return commonLen
 }
 
 type diffOp struct {
@@ -102,40 +123,52 @@ type diffOp struct {
 	text string
 }
 
-func buildDiffOps(a, b []string) []diffOp {
-	m, n := len(a), len(b)
-	lcs := make([][]int, m+1)
-	for i := range lcs {
-		lcs[i] = make([]int, n+1)
+func buildDiffOps(oldLines, newLines []string) []diffOp {
+	lcs := buildLCS(oldLines, newLines)
+
+	row, col := len(oldLines), len(newLines)
+
+	var rev []diffOp
+
+	for row > 0 || col > 0 {
+		switch {
+		case row > 0 && col > 0 && oldLines[row-1] == newLines[col-1]:
+			rev = append(rev, diffOp{' ', oldLines[row-1]})
+			row--
+			col--
+
+		case col > 0 && (row == 0 || lcs[row][col-1] >= lcs[row-1][col]):
+			rev = append(rev, diffOp{'+', newLines[col-1]})
+			col--
+
+		default:
+			rev = append(rev, diffOp{'-', oldLines[row-1]})
+			row--
+		}
 	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if a[i-1] == b[j-1] {
-				lcs[i][j] = lcs[i-1][j-1] + 1
+
+	slices.Reverse(rev)
+
+	return rev
+}
+
+func buildLCS(oldLines, newLines []string) [][]int {
+	rows, cols := len(oldLines), len(newLines)
+
+	lcs := make([][]int, rows+1)
+	for i := range lcs {
+		lcs[i] = make([]int, cols+1)
+	}
+
+	for row := 1; row <= rows; row++ {
+		for col := 1; col <= cols; col++ {
+			if oldLines[row-1] == newLines[col-1] {
+				lcs[row][col] = lcs[row-1][col-1] + 1
 			} else {
-				lcs[i][j] = max(lcs[i-1][j], lcs[i][j-1])
+				lcs[row][col] = max(lcs[row-1][col], lcs[row][col-1])
 			}
 		}
 	}
 
-	var ops []diffOp
-	i, j := m, n
-	var rev []diffOp
-	for i > 0 || j > 0 {
-		if i > 0 && j > 0 && a[i-1] == b[j-1] {
-			rev = append(rev, diffOp{' ', a[i-1]})
-			i--
-			j--
-		} else if j > 0 && (i == 0 || lcs[i][j-1] >= lcs[i-1][j]) {
-			rev = append(rev, diffOp{'+', b[j-1]})
-			j--
-		} else {
-			rev = append(rev, diffOp{'-', a[i-1]})
-			i--
-		}
-	}
-	for k := len(rev) - 1; k >= 0; k-- {
-		ops = append(ops, rev[k])
-	}
-	return ops
+	return lcs
 }

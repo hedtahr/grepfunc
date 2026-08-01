@@ -7,8 +7,9 @@ import (
 
 func TestUnifiedDiffNoChange(t *testing.T) {
 	old := []byte("line1\nline2\nline3\n")
-	new := []byte("line1\nline2\nline3\n")
-	result := unifiedDiff(old, new, "test.txt", 0)
+	newContent := []byte("line1\nline2\nline3\n")
+
+	result := unifiedDiff(old, newContent, "test.txt", 0)
 	if !strings.Contains(result, "(no changes)") {
 		t.Errorf("expected no changes, got: %s", result)
 	}
@@ -16,11 +17,13 @@ func TestUnifiedDiffNoChange(t *testing.T) {
 
 func TestUnifiedDiffSingleLine(t *testing.T) {
 	old := []byte("line1\nline2\nline3\n")
-	new := []byte("line1\nline2_changed\nline3\n")
-	result := unifiedDiff(old, new, "test.txt", 0)
+	newContent := []byte("line1\nline2_changed\nline3\n")
+
+	result := unifiedDiff(old, newContent, "test.txt", 0)
 	if strings.Contains(result, "(no changes)") {
 		t.Error("expected changes")
 	}
+
 	if !strings.Contains(result, "line2_changed") {
 		t.Errorf("missing changed line: %s", result)
 	}
@@ -28,8 +31,9 @@ func TestUnifiedDiffSingleLine(t *testing.T) {
 
 func TestUnifiedDiffAddition(t *testing.T) {
 	old := []byte("line1\nline2\n")
-	new := []byte("line1\nline2\nline3\n")
-	result := unifiedDiff(old, new, "test.txt", 0)
+	newContent := []byte("line1\nline2\nline3\n")
+
+	result := unifiedDiff(old, newContent, "test.txt", 0)
 	if !strings.Contains(result, "line3") {
 		t.Errorf("missing added line: %s", result)
 	}
@@ -37,8 +41,9 @@ func TestUnifiedDiffAddition(t *testing.T) {
 
 func TestUnifiedDiffDeletion(t *testing.T) {
 	old := []byte("line1\nline2\nline3\n")
-	new := []byte("line1\nline3\n")
-	result := unifiedDiff(old, new, "test.txt", 0)
+	newContent := []byte("line1\nline3\n")
+
+	result := unifiedDiff(old, newContent, "test.txt", 0)
 	if !strings.Contains(result, "line2") {
 		t.Errorf("missing deleted line: %s", result)
 	}

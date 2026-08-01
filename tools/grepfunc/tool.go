@@ -2,6 +2,7 @@ package grepfunc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -10,33 +11,156 @@ import (
 	"github.com/hedtahr/grepfunc/server"
 )
 
+// Schema keys and content types shared by the tool definition and callers.
+const (
+	schemaPattern = "pattern"
+	schemaPath    = "path"
+	schemaInclude = "include"
+	schemaString  = "string"
+	schemaInteger = "integer"
+	schemaBoolean = "boolean"
+	schemaBody    = "body"
+	schemaText    = "text"
+)
+
+// Caps for search result sizes and previews.
+const (
+	maxResultsCap       = 50
+	fetchCap            = 200
+	scopedSearchMax     = 20
+	sigPreviewCap       = 240
+	maxContextCap       = 8
+	summarySides        = 2
+	defaultSummaryLines = 5
+)
+
+// errPatternRequired is returned when no pattern is supplied.
+var errPatternRequired = errors.New("pattern is required")
+
+// Tool defines the grep_func MCP tool.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "grep_func",
-	Description: "Use when you need a function/method's full definition to read or edit its code. Returns complete brace-aware bodies with line numbers — native grep only returns matching lines, forcing a follow-up read. body=true returns full bodies; default returns signature + location. Set symbol=<name> to search for a pattern inside one specific symbol's body. For plain-text search (constants, config, prose) use grep instead.",
+	Name: "grep_func",
+	Description: "Use when you need a function/method's full definition to read or edit its code. " +
+		"Returns complete brace-aware bodies with line numbers — native grep only returns matching lines, " +
+		"forcing a follow-up read. body=true returns full bodies; default returns signature + location. " +
+		"Set symbol=<name> to search for a pattern inside one specific symbol's body. " +
+		"For plain-text search (constants, config, prose) use grep instead.",
 	InputSchema: server.InputSchema{
-		Type: "object",
+		Type:                 "object",
+		AdditionalProperties: false,
 		Properties: map[string]server.Property{
-			"pattern":         {Type: "string", Description: "Regex pattern to match against function names or code. Matches anywhere inside a function's lines — not just the signature. Examples: 'func.*Handler', 'def process', 'return', 'TODO'."},
-			"path":            {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
-			"include":         {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions."},
-			"max_results":     {Type: "integer", Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases to reduce token usage."},
-			"offset":          {Type: "integer", Description: "Starting position for paginated results (0-based)."},
-			"body":            {Type: "boolean", Description: "Include full function body in output. Default: false (signature + location only)."},
-			"case_sensitive":  {Type: "boolean", Description: "Case-sensitive regex. Default: false (case-insensitive)."},
-			"summary":         {Type: "boolean", Description: "If true and body=true, truncate large functions: shows first+last N lines with omission count. Reduces token cost for large handlers."},
-			"summary_lines":   {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
-			"names_only":      {Type: "boolean", Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans."},
-			"include_types":   {Type: "boolean", Description: "If true, also return type definitions (struct/class/interface/enum) in the results. Combines grep_func + grep_struct in one call."},
-			"sig_lines":       {Type: "integer", Description: "Lines of signature when body=false. Default 1 (first line only). Use 2-3 for multi-line signatures."},
-			"compact":         {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
-			"receiver":        {Type: "string", Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). Applies to Go, Rust, Python classes."},
-			"group_by_file":   {Type: "boolean", Description: "Group results under file headers instead of a flat list. Reduces navigation overhead in large multi-file scans."},
-			"token_budget":    {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only/summary mode. No default (unlimited)."},
-			"exclude_pattern": {Type: "string", Description: "Regex to exclude matching results. Filters on body and name."},
-			"symbol":          {Type: "string", Description: "If set, search INSIDE the named symbol's body instead of listing functions. Finds the symbol (function or type) by name, then returns matching lines with context — ~5x cheaper than body=true for targeted searches."},
-			"context_lines":   {Type: "integer", Description: "Lines of context around each match when symbol is set. Default 2, max 8."},
+			schemaPattern: {
+				Type:  schemaString,
+				Items: nil,
+				Description: "Regex pattern to match against function names or code. Matches anywhere inside a " +
+					"function's lines — not just the signature. Examples: 'func.*Handler', 'def process', " +
+					"'return', 'TODO'.",
+			},
+			schemaPath: {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Directory to search. Optional — defaults to the opened project root.",
+			},
+			schemaInclude: {
+				Type:  schemaString,
+				Items: nil,
+				Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', " +
+					"'**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions.",
+			},
+			"max_results": {
+				Type:  schemaInteger,
+				Items: nil,
+				Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases " +
+					"to reduce token usage.",
+			},
+			"offset": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Starting position for paginated results (0-based).",
+			},
+			schemaBody: {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Include full function body in output. Default: false (signature + location only).",
+			},
+			"case_sensitive": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Case-sensitive regex. Default: false (case-insensitive).",
+			},
+			"summary": {
+				Type:  schemaBoolean,
+				Items: nil,
+				Description: "If true and body=true, truncate large functions: shows first+last N lines with " +
+					"omission count. Reduces token cost for large handlers.",
+			},
+			"summary_lines": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Lines to show at start and end when summary=true. Default 5.",
+			},
+			"names_only": {
+				Type:  schemaBoolean,
+				Items: nil,
+				Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x " +
+					"fewer tokens than body=true). For table-of-contents scans.",
+			},
+			"include_types": {
+				Type:  schemaBoolean,
+				Items: nil,
+				Description: "If true, also return type definitions (struct/class/interface/enum) in the results. " +
+					"Combines grep_func + grep_struct in one call.",
+			},
+			"sig_lines": {
+				Type:  schemaInteger,
+				Items: nil,
+				Description: "Lines of signature when body=false. Default 1 (first line only). Use 2-3 for " +
+					"multi-line signatures.",
+			},
+			"compact": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false.",
+			},
+			"receiver": {
+				Type:  schemaString,
+				Items: nil,
+				Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). " +
+					"Applies to Go, Rust, Python classes.",
+			},
+			"group_by_file": {
+				Type:  schemaBoolean,
+				Items: nil,
+				Description: "Group results under file headers instead of a flat list. Reduces navigation overhead " +
+					"in large multi-file scans.",
+			},
+			"token_budget": {
+				Type:  schemaInteger,
+				Items: nil,
+				Description: "Max output chars. If exceeded, auto-switches to names_only/summary mode. No default " +
+					"(unlimited).",
+			},
+			"exclude_pattern": {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Regex to exclude matching results. Filters on body and name.",
+			},
+			"symbol": {
+				Type:  schemaString,
+				Items: nil,
+				Description: "If set, search INSIDE the named symbol's body instead of listing functions. Finds the " +
+					"symbol (function or type) by name, then returns matching lines with context — ~5x " +
+					"cheaper than body=true for targeted searches.",
+			},
+			"context_lines": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Lines of context around each match when symbol is set. Default 2, max 8.",
+			},
 		},
-		Required: []string{"pattern"},
+		Required: []string{schemaPattern},
 	},
 }
 
@@ -62,6 +186,7 @@ type args struct {
 	ContextLines   int    `json:"context_lines"`
 }
 
+// FuncMatch is a matched function or type block extracted from a file.
 type FuncMatch struct {
 	File    string `json:"file"`
 	Line    int    `json:"line"`
@@ -72,435 +197,559 @@ type FuncMatch struct {
 	Kind    string `json:"kind,omitempty"`
 }
 
+// Handle processes a grep_func tool call.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a args
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
-	}
-	if a.Pattern == "" {
-		return nil, fmt.Errorf("pattern is required")
-	}
-	a.Path = server.ResolvePath(a.Path)
-	if a.MaxResults <= 0 {
-		a.MaxResults = 15
-	}
-	if a.MaxResults > 50 {
-		a.MaxResults = 50
-	}
-	if a.Include == "" {
-		a.Include = "*"
-	}
-	if a.SigLines <= 0 {
-		a.SigLines = 1
-	}
+	var arg args
 
-	pattern, err := CompilePattern(a.Pattern, a.CaseSensitive)
+	err := json.Unmarshal(raw, &arg)
 	if err != nil {
-		return nil, fmt.Errorf("invalid regex pattern: %v", err)
-	}
-	if a.Symbol != "" {
-		return scopedSearch(a, pattern)
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	fetchMax := a.MaxResults
-	if a.Offset > 0 {
-		fetchMax = min(a.Offset+a.MaxResults, 200)
+	if arg.Pattern == "" {
+		return nil, errPatternRequired
 	}
-	var results, typeResults []FuncMatch
-	if a.IncludeTypes {
-		var err error
-		results, typeResults, err = SearchBoth(a.Path, a.Include, pattern, fetchMax)
+
+	applyDefaults(&arg)
+
+	pattern, err := CompilePattern(arg.Pattern, arg.CaseSensitive)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	if arg.Symbol != "" {
+		return scopedSearch(arg, pattern)
+	}
+
+	fetchMax := arg.MaxResults
+	if arg.Offset > 0 {
+		fetchMax = min(arg.Offset+arg.MaxResults, fetchCap)
+	}
+
+	results, typeResults, err := searchMatches(arg, pattern, fetchMax)
+	if err != nil {
+		return nil, err
+	}
+
+	all := setKinds(results, typeResults)
+
+	// Post-filter by receiver type name
+	if arg.Receiver != "" {
+		all = filterByReceiver(all, arg.Receiver)
+	}
+
+	// Exclude pattern filter
+	if arg.ExcludePattern != "" {
+		all, err = filterByExclude(all, arg.ExcludePattern)
 		if err != nil {
-			return nil, err
-		}
-	} else {
-		var err error
-		results, err = Search(a.Path, a.Include, pattern, fetchMax, IsFuncSig)
-		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("exclude_pattern: %w", err)
 		}
 	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: schemaText, Text: renderPaged(arg, all)}},
+		IsError: false,
+	}, nil
+}
+
+// applyDefaults fills in default values for unset args.
+func applyDefaults(arg *args) {
+	arg.Path = server.ResolvePath(arg.Path)
+	if arg.MaxResults <= 0 {
+		arg.MaxResults = 15
+	}
+
+	if arg.MaxResults > maxResultsCap {
+		arg.MaxResults = maxResultsCap
+	}
+
+	if arg.Include == "" {
+		arg.Include = "*"
+	}
+
+	if arg.SigLines <= 0 {
+		arg.SigLines = 1
+	}
+}
+
+// setKinds labels func and type matches, then merges them into one slice.
+func setKinds(results, typeResults []FuncMatch) []FuncMatch {
 	for i := range results {
 		results[i].Kind = "func"
 	}
+
 	for i := range typeResults {
 		typeResults[i].Kind = "type"
 	}
 
-	all := append(results, typeResults...)
+	all := make([]FuncMatch, 0, len(results)+len(typeResults))
+	all = append(all, results...)
+	all = append(all, typeResults...)
 
-	// Post-filter by receiver type name
-	if a.Receiver != "" {
-		all = filterByReceiver(all, a.Receiver)
+	return all
+}
+
+// searchMatches runs Search or SearchBoth depending on includeTypes.
+func searchMatches(arg args, pattern *regexp.Regexp, fetchMax int) ([]FuncMatch, []FuncMatch, error) {
+	if arg.IncludeTypes {
+		return SearchBoth(arg.Path, arg.Include, pattern, fetchMax)
 	}
 
-	// Exclude pattern filter
-	if a.ExcludePattern != "" {
-		all, err = filterByExclude(all, a.ExcludePattern)
-		if err != nil {
-			return nil, fmt.Errorf("exclude_pattern: %v", err)
-		}
-	}
+	results, err := Search(arg.Path, arg.Include, pattern, fetchMax, IsFuncSig)
 
+	return results, nil, err
+}
+
+// renderPaged applies pagination and the token budget to the final output.
+func renderPaged(arg args, all []FuncMatch) string {
 	total := len(all)
-	start := min(a.Offset, total)
-	end := min(start+a.MaxResults, total)
+	start := min(arg.Offset, total)
+	end := min(start+arg.MaxResults, total)
 	page := all[start:end]
 
-	// Defer token_budget check: build full, then rebuild terse if needed
-	buildOutput := func(namesOnly bool) string {
-		var buf strings.Builder
-		includeBody := !namesOnly && a.Body
-		compact := a.Compact
-		label := "match"
-		if !a.IncludeTypes {
-			label = "function"
-		}
-		if compact {
-			fmt.Fprintf(&buf, "%d %ss %q", total, label, a.Pattern)
-		} else {
-			fmt.Fprintf(&buf, "%d %ss matching %q", total, label, a.Pattern)
-		}
-		if total > a.MaxResults || a.Offset > 0 {
-			fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
-		}
-		if compact {
-			buf.WriteString("\n")
-		} else {
-			buf.WriteString("\n")
-		}
-		type fileGroup struct {
-			file    string
-			matches []FuncMatch
-		}
-		groupResults := func(ms []FuncMatch) []fileGroup {
-			seen := map[string]int{}
-			var groups []fileGroup
-			for _, m := range ms {
-				rel := server.RelPath(m.File)
-				if idx, ok := seen[rel]; ok {
-					groups[idx].matches = append(groups[idx].matches, m)
-				} else {
-					seen[rel] = len(groups)
-					groups = append(groups, fileGroup{file: rel, matches: []FuncMatch{m}})
-				}
-			}
-			return groups
+	output := renderResults(arg, page, total, start, end, arg.NamesOnly)
+	if arg.TokenBudget > 0 && len(output) > arg.TokenBudget && !arg.NamesOnly {
+		output = renderResults(arg, page, total, start, end, true)
+		if len(output) > arg.TokenBudget {
+			output = output[:arg.TokenBudget]
 		}
 
-		if a.GroupByFile {
-			for _, g := range groupResults(page) {
-				if compact {
-					fmt.Fprintf(&buf, "%s (%d)\n", g.file, len(g.matches))
-				} else {
-					fmt.Fprintf(&buf, "\n%s — %d matches\n", g.file, len(g.matches))
-				}
-				if !includeBody {
-					buf.WriteString("```\n")
-				}
-				for _, m := range g.matches {
-					if namesOnly {
-						nm := m.Name
-						if a.IncludeTypes && m.Kind != "" {
-							nm = "[" + m.Kind + "] " + nm
-						}
-						if compact {
-							fmt.Fprintf(&buf, "L%d: %s\n", m.Line, nm)
-						} else {
-							fmt.Fprintf(&buf, "L%d: %s (%dL)\n", m.Line, nm, m.Lines)
-						}
-						continue
-					}
-					if includeBody {
-						fmt.Fprintf(&buf, "L%d-%d: %s\n", m.Line, m.EndLine, firstLine(m.Body, true))
-					} else {
-						sig := sigPreview(m.Body, a.SigLines)
-						if a.IncludeTypes && m.Kind != "" {
-							sig = "[" + m.Kind + "] " + sig
-						}
-						fmt.Fprintf(&buf, "L%d-%d: %s\n", m.Line, m.EndLine, sig)
-					}
-					if includeBody {
-						ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
-						if ext == "" {
-							ext = "go"
-						}
-						body := m.Body
-						if a.Summary {
-							sl := a.SummaryLines
-							if sl <= 0 {
-								sl = 5
-							}
-							body = SummarizeBody(body, sl)
-						}
-						fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(body, "\n"))
-					}
-				}
-				if !includeBody {
-					buf.WriteString("```\n")
-				}
-			}
-		} else {
-			if !includeBody {
-				buf.WriteString("```\n")
-			}
-			for _, m := range page {
-				rel := server.RelPath(m.File)
-				if namesOnly {
-					nm := m.Name
-					if a.IncludeTypes && m.Kind != "" {
-						nm = "[" + m.Kind + "] " + nm
-					}
-					if compact {
-						fmt.Fprintf(&buf, "%s:%d: %s\n", rel, m.Line, nm)
-					} else {
-						fmt.Fprintf(&buf, "%s:%d: %s (%dL)\n", rel, m.Line, nm, m.Lines)
-					}
-					continue
-				}
-				if includeBody {
-					fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, firstLine(m.Body, true))
-				} else {
-					sig := sigPreview(m.Body, a.SigLines)
-					if a.IncludeTypes && m.Kind != "" {
-						sig = "[" + m.Kind + "] " + sig
-					}
-					fmt.Fprintf(&buf, "%s:%d-%d: %s\n", rel, m.Line, m.EndLine, sig)
-				}
-				if includeBody {
-					ext := strings.TrimPrefix(filepath.Ext(m.File), ".")
-					if ext == "" {
-						ext = "go"
-					}
-					body := m.Body
-					if a.Summary {
-						sl := a.SummaryLines
-						if sl <= 0 {
-							sl = 5
-						}
-						body = SummarizeBody(body, sl)
-					}
-					fmt.Fprintf(&buf, "```%s\n%s\n```\n", ext, strings.TrimRight(body, "\n"))
-				}
-			}
-			if !includeBody {
-				buf.WriteString("```\n")
-			}
-		} // end group_by_file else
-		if end < total {
-			fmt.Fprintf(&buf, "\n%d more results. Use offset=%d for next page.", total-end, end)
-		}
-		return buf.String()
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
+			"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)
 	}
 
-	output := buildOutput(a.NamesOnly)
-	if a.TokenBudget > 0 && len(output) > a.TokenBudget && !a.NamesOnly {
-		output = buildOutput(true)
-		if len(output) > a.TokenBudget {
-			output = output[:a.TokenBudget]
-		}
-		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
+	return output
+}
+
+// renderResults builds the text output for a page of matches.
+func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly bool) string {
+	var buf strings.Builder
+
+	includeBody := !namesOnly && arg.Body
+	compact := arg.Compact
+
+	label := "match"
+	if !arg.IncludeTypes {
+		label = "function"
 	}
 
-	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: output}},
-	}, nil
+	if compact {
+		fmt.Fprintf(&buf, "%d %ss %q", total, label, arg.Pattern)
+	} else {
+		fmt.Fprintf(&buf, "%d %ss matching %q", total, label, arg.Pattern)
+	}
+
+	if total > arg.MaxResults || arg.Offset > 0 {
+		fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
+	}
+
+	buf.WriteString("\n")
+
+	if arg.GroupByFile {
+		renderGrouped(&buf, arg, page, namesOnly, includeBody, compact)
+	} else {
+		renderFlat(&buf, arg, page, namesOnly, includeBody, compact)
+	}
+
+	if end < total {
+		fmt.Fprintf(&buf, "\n%d more results. Use offset=%d for next page.", total-end, end)
+	}
+
+	return buf.String()
+}
+
+// fileGroup groups matches by file for the group_by_file output.
+type fileGroup struct {
+	file    string
+	matches []FuncMatch
+}
+
+// groupResults buckets matches by their relative path, preserving order.
+func groupResults(ms []FuncMatch) []fileGroup {
+	seen := map[string]int{}
+
+	var groups []fileGroup
+
+	for _, match := range ms {
+		rel := server.RelPath(match.File)
+		if idx, ok := seen[rel]; ok {
+			groups[idx].matches = append(groups[idx].matches, match)
+		} else {
+			seen[rel] = len(groups)
+			groups = append(groups, fileGroup{file: rel, matches: []FuncMatch{match}})
+		}
+	}
+
+	return groups
+}
+
+// renderGrouped writes matches grouped under file headers.
+func renderGrouped(buf *strings.Builder, arg args, page []FuncMatch, namesOnly, includeBody, compact bool) {
+	for _, group := range groupResults(page) {
+		if compact {
+			fmt.Fprintf(buf, "%s (%d)\n", group.file, len(group.matches))
+		} else {
+			fmt.Fprintf(buf, "\n%s — %d matches\n", group.file, len(group.matches))
+		}
+
+		if !includeBody {
+			buf.WriteString("```\n")
+		}
+
+		for _, match := range group.matches {
+			appendMatch(buf, match, "L", namesOnly, includeBody, compact, arg)
+		}
+
+		if !includeBody {
+			buf.WriteString("```\n")
+		}
+	}
+}
+
+// renderFlat writes matches one per line.
+func renderFlat(buf *strings.Builder, arg args, page []FuncMatch, namesOnly, includeBody, compact bool) {
+	if !includeBody {
+		buf.WriteString("```\n")
+	}
+
+	for _, match := range page {
+		rel := server.RelPath(match.File)
+		appendMatch(buf, match, rel+":", namesOnly, includeBody, compact, arg)
+	}
+
+	if !includeBody {
+		buf.WriteString("```\n")
+	}
+}
+
+// appendMatch writes a single match line (and body block when requested).
+func appendMatch(buf *strings.Builder, match FuncMatch, loc string, namesOnly, includeBody, compact bool, arg args) {
+	if namesOnly {
+		name := kindPrefix(match.Kind, arg.IncludeTypes) + match.Name
+
+		if compact {
+			fmt.Fprintf(buf, "%s%d: %s\n", loc, match.Line, name)
+		} else {
+			fmt.Fprintf(buf, "%s%d: %s (%dL)\n", loc, match.Line, name, match.Lines)
+		}
+
+		return
+	}
+
+	if includeBody {
+		fmt.Fprintf(buf, "%s%d-%d: %s\n", loc, match.Line, match.EndLine, firstLine(match.Body, true))
+	} else {
+		sig := kindPrefix(match.Kind, arg.IncludeTypes) + sigPreview(match.Body, arg.SigLines)
+		fmt.Fprintf(buf, "%s%d-%d: %s\n", loc, match.Line, match.EndLine, sig)
+	}
+
+	if includeBody {
+		body := match.Body
+
+		if arg.Summary {
+			body = SummarizeBody(body, summarizeLines(arg.SummaryLines))
+		}
+
+		fmt.Fprintf(buf, "```%s\n%s\n```\n", codeFenceExt(match.File), strings.TrimRight(body, "\n"))
+	}
+}
+
+// kindPrefix returns the "[kind] " prefix when includeTypes is set and kind is known.
+func kindPrefix(kind string, includeTypes bool) string {
+	if includeTypes && kind != "" {
+		return "[" + kind + "] "
+	}
+
+	return ""
+}
+
+// codeFenceExt returns the code-fence language tag for a file, defaulting to go.
+func codeFenceExt(file string) string {
+	ext := strings.TrimPrefix(filepath.Ext(file), ".")
+	if ext == "" {
+		return "go"
+	}
+
+	return ext
+}
+
+// summarizeLines returns the number of summary lines, defaulting to 5.
+func summarizeLines(n int) int {
+	if n <= 0 {
+		return defaultSummaryLines
+	}
+
+	return n
 }
 
 func filterByReceiver(matches []FuncMatch, name string) []FuncMatch {
 	// Match Go: func (ident Type) method or func (ident *Type) method
 	pat := `\(\s*\*?\s*` + regexp.QuoteMeta(name) + `\s*\)`
-	re := regexp.MustCompile(pat)
+	patRe := regexp.MustCompile(pat)
+
 	out := matches[:0]
+
 	for _, m := range matches {
-		if re.MatchString(m.Body) {
+		if patRe.MatchString(m.Body) {
 			out = append(out, m)
 		}
 	}
+
 	return out
 }
 
 func filterByExclude(matches []FuncMatch, excludePattern string) ([]FuncMatch, error) {
-	re, err := CompilePattern(excludePattern, false)
+	excludeRe, err := CompilePattern(excludePattern, false)
 	if err != nil {
 		return nil, err
 	}
+
 	out := matches[:0]
+
 	for _, m := range matches {
-		if re.MatchString(m.Body) || re.MatchString(m.Name) {
+		if excludeRe.MatchString(m.Body) || excludeRe.MatchString(m.Name) {
 			continue
 		}
+
 		out = append(out, m)
 	}
+
 	return out, nil
 }
 
-func sigPreview(body string, n int) string {
-	if n <= 1 {
+func sigPreview(body string, maxLines int) string {
+	if maxLines <= 1 {
 		return firstLine(body, false)
 	}
-	lines := strings.SplitN(body, "\n", n+1)
-	if len(lines) > n {
-		lines = lines[:n]
+
+	lines := strings.SplitN(body, "\n", maxLines+1)
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
 	}
+
 	s := strings.TrimSpace(strings.Join(lines, " ↵ "))
-	if len(s) > 240 {
-		return s[:240] + "..."
+	if len(s) > sigPreviewCap {
+		return s[:sigPreviewCap] + "..."
 	}
+
 	return s
 }
 
-func firstLine(s string, includeBody bool) string {
-	if before, _, found := strings.Cut(s, "\n"); found {
-		s = strings.TrimSpace(before)
+func firstLine(line string, includeBody bool) string {
+	if before, _, found := strings.Cut(line, "\n"); found {
+		line = strings.TrimSpace(before)
 	}
-	if !includeBody && len(s) > 120 {
-		return s[:120] + "..."
+
+	if !includeBody && len(line) > 120 {
+		return line[:120] + "..."
 	}
-	return s
+
+	return line
 }
 
-func SummarizeBody(body string, n int) string {
+// SummarizeBody keeps the first and last maxLines lines of a body, marking omitted lines.
+func SummarizeBody(body string, maxLines int) string {
 	lines := strings.Split(body, "\n")
-	if len(lines) <= n*2+1 {
+	if len(lines) <= maxLines*summarySides+1 {
 		return body
 	}
-	omitted := len(lines) - n*2
+
+	omitted := len(lines) - maxLines*summarySides
+
 	var buf strings.Builder
-	for i := range n {
+	for i := range maxLines {
 		buf.WriteString(lines[i])
 		buf.WriteByte('\n')
 	}
+
 	fmt.Fprintf(&buf, "// ... (%d lines omitted)\n", omitted)
-	for i := len(lines) - n; i < len(lines); i++ {
+
+	for i := len(lines) - maxLines; i < len(lines); i++ {
 		buf.WriteString(lines[i])
+
 		if i < len(lines)-1 {
 			buf.WriteByte('\n')
 		}
 	}
+
 	return buf.String()
 }
 
-func scopedSearch(a args, patRe *regexp.Regexp) (*server.ToolCallResult, error) {
-	if a.ContextLines <= 0 {
-		a.ContextLines = 2
-	}
-	if a.ContextLines > 8 {
-		a.ContextLines = 8
-	}
-	symbolRe, err := CompilePattern(`\b`+regexp.QuoteMeta(a.Symbol)+`\b`, a.CaseSensitive)
-	if err != nil {
-		return nil, fmt.Errorf("invalid symbol name: %v", err)
+// scopedSearch searches inside a named symbol's body for pattern matches.
+func scopedSearch(arg args, patRe *regexp.Regexp) (*server.ToolCallResult, error) {
+	if arg.ContextLines <= 0 {
+		arg.ContextLines = 2
 	}
 
+	if arg.ContextLines > maxContextCap {
+		arg.ContextLines = maxContextCap
+	}
+
+	symbolRe, err := CompilePattern(`\b`+regexp.QuoteMeta(arg.Symbol)+`\b`, arg.CaseSensitive)
+	if err != nil {
+		return nil, fmt.Errorf("invalid symbol name: %w", err)
+	}
+
+	symbols := findSymbols(arg, symbolRe)
+
+	if len(symbols) == 0 {
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{
+				Type: schemaText,
+				Text: fmt.Sprintf("Symbol %q not found.", arg.Symbol),
+			}},
+			IsError: false,
+		}, nil
+	}
+
+	var buf strings.Builder
+
+	totalMatches := 0
+
+	for _, sym := range symbols {
+		totalMatches += renderScopedSymbol(&buf, sym, arg, patRe)
+	}
+
+	if totalMatches == 0 {
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{
+				Type: schemaText,
+				Text: fmt.Sprintf("No matches for /%s/ inside %q.", arg.Pattern, arg.Symbol),
+			}},
+			IsError: false,
+		}, nil
+	}
+
+	output := buf.String()
+	if arg.TokenBudget > 0 && len(output) > arg.TokenBudget {
+		output = renderScopedTerse(arg, symbols, patRe)
+	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: schemaText, Text: output}},
+		IsError: false,
+	}, nil
+}
+
+// findSymbols locates funcs and types whose name matches symbolRe.
+func findSymbols(arg args, symbolRe *regexp.Regexp) []FuncMatch {
 	var symbols []FuncMatch
-	funcs, _ := Search(a.Path, a.Include, symbolRe, 20, IsFuncSig)
+
+	funcs, _ := Search(arg.Path, arg.Include, symbolRe, scopedSearchMax, IsFuncSig)
 	for _, f := range funcs {
 		if symbolRe.MatchString(f.Name) {
 			symbols = append(symbols, f)
 		}
 	}
-	types, _ := Search(a.Path, a.Include, symbolRe, 20, IsStructSig)
+
+	types, _ := Search(arg.Path, arg.Include, symbolRe, scopedSearchMax, IsStructSig)
 	for _, t := range types {
 		if symbolRe.MatchString(t.Name) {
 			symbols = append(symbols, t)
 		}
 	}
 
-	if len(symbols) == 0 {
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("Symbol %q not found.", a.Symbol)}},
-		}, nil
+	return symbols
+}
+
+// window is a context window around a hit line inside a symbol body.
+type window struct {
+	start, end int
+	matches    map[int]bool
+}
+
+// buildWindows merges overlapping context windows around hit lines.
+func buildWindows(hitIdxs []int, ctx, lastIdx int) []window {
+	var windows []window
+
+	for _, idx := range hitIdxs {
+		wStart := max(0, idx-ctx)
+		wEnd := min(lastIdx, idx+ctx)
+
+		if len(windows) > 0 && wStart <= windows[len(windows)-1].end+1 {
+			last := &windows[len(windows)-1]
+			last.end = max(last.end, wEnd)
+			last.matches[idx] = true
+		} else {
+			windows = append(windows, window{start: wStart, end: wEnd, matches: map[int]bool{idx: true}})
+		}
 	}
 
-	var buf strings.Builder
-	totalMatches := 0
+	return windows
+}
+
+// renderScopedSymbol writes one symbol's matches and returns the number of hits.
+func renderScopedSymbol(buf *strings.Builder, sym FuncMatch, arg args, patRe *regexp.Regexp) int {
+	rel := server.RelPath(sym.File)
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(sym.File)), ".")
+	ctx := arg.ContextLines
+	bodyLines := strings.Split(sym.Body, "\n")
+
+	var hitIdxs []int
+
+	for i, line := range bodyLines {
+		if patRe.MatchString(line) {
+			hitIdxs = append(hitIdxs, i)
+		}
+	}
+
+	if len(hitIdxs) == 0 {
+		return 0
+	}
+
+	startLine := sym.Line
+	if startLine == 0 {
+		startLine = 1
+	}
+
+	fmt.Fprintf(buf, "%d matches for /%s/ in %q (%s:L%d-%d):\n\n",
+		len(hitIdxs), arg.Pattern, sym.Name, rel, startLine, sym.EndLine)
+
+	for _, w := range buildWindows(hitIdxs, ctx, len(bodyLines)-1) {
+		fmt.Fprintf(buf, "```%s\n", ext)
+
+		for i := w.start; i <= w.end; i++ {
+			absLine := startLine + i
+			if w.matches[i] {
+				fmt.Fprintf(buf, "> L%d: %s\n", absLine, bodyLines[i])
+			} else {
+				fmt.Fprintf(buf, "  L%d: %s\n", absLine, bodyLines[i])
+			}
+		}
+
+		buf.WriteString("```\n\n")
+	}
+
+	return len(hitIdxs)
+}
+
+// renderScopedTerse rebuilds output as file:line hits when the budget is exceeded.
+func renderScopedTerse(arg args, symbols []FuncMatch, patRe *regexp.Regexp) string {
+	var terse strings.Builder
 
 	for _, sym := range symbols {
 		rel := server.RelPath(sym.File)
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(sym.File)), ".")
-		ctx := a.ContextLines
-		bodyLines := strings.Split(sym.Body, "\n")
-		var hitIdxs []int
-		for i, line := range bodyLines {
-			if patRe.MatchString(line) {
-				hitIdxs = append(hitIdxs, i)
-			}
-		}
-		if len(hitIdxs) == 0 {
-			continue
-		}
-		totalMatches += len(hitIdxs)
+		lines := strings.Split(sym.Body, "\n")
 
 		startLine := sym.Line
 		if startLine == 0 {
 			startLine = 1
 		}
 
-		fmt.Fprintf(&buf, "%d matches for /%s/ in %q (%s:L%d-%d):\n\n",
-			len(hitIdxs), a.Pattern, sym.Name, rel, startLine, sym.EndLine)
-
-		type window struct {
-			start, end int
-			matches    map[int]bool
-		}
-		var windows []window
-		for _, idx := range hitIdxs {
-			ws := max(0, idx-ctx)
-			we := min(len(bodyLines)-1, idx+ctx)
-			if len(windows) > 0 && ws <= windows[len(windows)-1].end+1 {
-				last := &windows[len(windows)-1]
-				last.end = max(last.end, we)
-				last.matches[idx] = true
-			} else {
-				windows = append(windows, window{start: ws, end: we, matches: map[int]bool{idx: true}})
+		for i, line := range lines {
+			if patRe.MatchString(line) {
+				fmt.Fprintf(&terse, "%s:%d: %s\n", rel, startLine+i, strings.TrimSpace(line))
 			}
-		}
-
-		for _, w := range windows {
-			fmt.Fprintf(&buf, "```%s\n", ext)
-			for i := w.start; i <= w.end; i++ {
-				absLine := startLine + i
-				if w.matches[i] {
-					fmt.Fprintf(&buf, "> L%d: %s\n", absLine, bodyLines[i])
-				} else {
-					fmt.Fprintf(&buf, "  L%d: %s\n", absLine, bodyLines[i])
-				}
-			}
-			buf.WriteString("```\n\n")
 		}
 	}
 
-	if totalMatches == 0 {
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("No matches for /%s/ inside %q.", a.Pattern, a.Symbol)}},
-		}, nil
+	output := terse.String()
+	if len(output) > arg.TokenBudget {
+		output = output[:arg.TokenBudget]
 	}
 
-	output := buf.String()
-	if a.TokenBudget > 0 && len(output) > a.TokenBudget {
-		var terse strings.Builder
-		for _, sym := range symbols {
-			rel := server.RelPath(sym.File)
-			lines := strings.Split(sym.Body, "\n")
-			startLine := sym.Line
-			if startLine == 0 {
-				startLine = 1
-			}
-			for i, line := range lines {
-				if patRe.MatchString(line) {
-					fmt.Fprintf(&terse, "%s:%d: %s\n", rel, startLine+i, strings.TrimSpace(line))
-				}
-			}
-		}
-		output = terse.String()
-		if len(output) > a.TokenBudget {
-			output = output[:a.TokenBudget]
-		}
-		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
-	}
+	output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
+		"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)
 
-	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: output}},
-	}, nil
+	return output
 }

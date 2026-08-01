@@ -12,7 +12,8 @@ import (
 
 func TestHandle(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "types.go")
+	filePath := filepath.Join(dir, "types.go")
+
 	code := `package test
 
 type User struct {
@@ -24,23 +25,33 @@ type Config struct {
 	Port int
 }
 `
-	os.WriteFile(fp, []byte(code), 0644)
 
-	raw, _ := json.Marshal(map[string]any{
-		"pattern":     "Name",
-		"path":        dir,
-		"include":     "*.go",
+	err := os.WriteFile(filePath, []byte(code), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		keyPattern:    keyName,
+		keyPath:       dir,
+		keyGoGlob:     keyGoGlob,
 		"max_results": 5,
-		"body":        true,
+		keyBody:       true,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Handle(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	if !strings.Contains(text, "User") {
 		t.Error("output should contain User struct")
 	}
+
 	if !strings.Contains(text, "\x60\x60\x60") {
 		t.Error("output should contain code blocks when body:true")
 	}
@@ -48,26 +59,37 @@ type Config struct {
 
 func TestBodyFalseSignatureOnly(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "types.go")
-	os.WriteFile(fp, []byte("package test\ntype User struct {\n\tName string\n}\n"), 0644)
+	filePath := filepath.Join(dir, "types.go")
 
-	raw, _ := json.Marshal(map[string]any{
-		"pattern": "Name",
-		"path":    dir,
-		"include": "*.go",
-		"body":    false,
+	err := os.WriteFile(filePath, []byte("package test\ntype User struct {\n\tName string\n}\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		keyPattern: keyName,
+		keyPath:    dir,
+		keyGoGlob:  "*.go",
+		keyBody:    false,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Handle(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	if text == "" {
 		t.Fatal("empty output")
 	}
+
 	if !strings.Contains(text, "\x60\x60\x60") {
 		t.Error("body=false should contain a code fence wrapper")
 	}
+
 	if !strings.Contains(text, "User") {
 		t.Error("should still contain struct name")
 	}
@@ -75,19 +97,28 @@ func TestBodyFalseSignatureOnly(t *testing.T) {
 
 func TestBodyTrueIncludesBody(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "types.go")
-	os.WriteFile(fp, []byte("package test\ntype User struct {\n\tName string\n}\n"), 0644)
+	filePath := filepath.Join(dir, "types.go")
 
-	raw, _ := json.Marshal(map[string]any{
-		"pattern": "Name",
-		"path":    dir,
-		"include": "*.go",
-		"body":    true,
+	err := os.WriteFile(filePath, []byte("package test\ntype User struct {\n\tName string\n}\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		keyPattern: keyName,
+		keyPath:    dir,
+		keyGoGlob:  "*.go",
+		keyBody:    true,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Handle(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	if !strings.Contains(text, "\x60\x60\x60") {
 		t.Error("body=true should contain code blocks")

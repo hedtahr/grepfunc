@@ -7,19 +7,31 @@ import (
 	"testing"
 )
 
+func marshalArgs(t *testing.T, args map[string]any) json.RawMessage {
+	t.Helper()
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return raw
+}
+
 func TestHandleEmptyList(t *testing.T) {
-	// Override storePath
+	// Override storePath.
 	origPath := storePath
+
 	storePath = func(_ string) (string, error) {
 		return filepath.Join(t.TempDir(), "memory.json"), nil
 	}
 	defer func() { storePath = origPath }()
 
-	raw, _ := json.Marshal(map[string]any{})
-	result, err := Handle(raw)
+	result, err := Handle(marshalArgs(t, map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !strings.Contains(result.Content[0].Text, "No memories yet") {
 		t.Error("empty state should show helpful message")
 	}
@@ -28,29 +40,30 @@ func TestHandleEmptyList(t *testing.T) {
 func TestSaveAndRecall(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
-	// Save
-	raw, _ := json.Marshal(map[string]any{
-		"key":   "style.comments",
-		"value": "one-liners only",
-	})
-	_, err := Handle(raw)
+	// Save.
+	_, err := Handle(marshalArgs(t, map[string]any{
+		keyField:   "style.comments",
+		valueField: "one-liners only",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Recall
-	raw, _ = json.Marshal(map[string]any{})
-	result, err := Handle(raw)
+	// Recall.
+	result, err := Handle(marshalArgs(t, map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	if !strings.Contains(text, "style.comments") {
 		t.Error("should list saved key")
 	}
+
 	if !strings.Contains(text, "one-liners only") {
 		t.Error("should list saved value")
 	}
@@ -59,19 +72,20 @@ func TestSaveAndRecall(t *testing.T) {
 func TestRecallSpecificKey(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
-	// Save two
+	// Save two.
 	saveKV(t, "a", "alpha")
 	saveKV(t, "b", "beta")
 
-	// Recall one
-	raw, _ := json.Marshal(map[string]any{"key": "a"})
-	result, err := Handle(raw)
+	// Recall one.
+	result, err := Handle(marshalArgs(t, map[string]any{keyField: "a"}))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if result.Content[0].Text != "alpha" {
 		t.Errorf("got %q, want alpha", result.Content[0].Text)
 	}
@@ -80,19 +94,18 @@ func TestRecallSpecificKey(t *testing.T) {
 func TestDelete(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
 	saveKV(t, "x", "y")
 
-	raw, _ := json.Marshal(map[string]any{"key": "x", "delete": true})
-	_, err := Handle(raw)
+	_, err := Handle(marshalArgs(t, map[string]any{keyField: "x", "delete": true}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	raw, _ = json.Marshal(map[string]any{})
-	result, _ := Handle(raw)
+	result, _ := Handle(marshalArgs(t, map[string]any{}))
 	if strings.Contains(result.Content[0].Text, "x") {
 		t.Error("deleted key should not appear")
 	}
@@ -101,14 +114,14 @@ func TestDelete(t *testing.T) {
 func TestUpsertOverwrites(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
 	saveKV(t, "theme", "dark")
 	saveKV(t, "theme", "light")
 
-	raw, _ := json.Marshal(map[string]any{"key": "theme"})
-	result, _ := Handle(raw)
+	result, _ := Handle(marshalArgs(t, map[string]any{keyField: "theme"}))
 	if result.Content[0].Text != "light" {
 		t.Errorf("got %q, want light", result.Content[0].Text)
 	}
@@ -119,14 +132,15 @@ func TestUpsertOverwrites(t *testing.T) {
 func TestMergeDistinctSubstringsKept(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
 	merge(t, "langs", "golang")
 	merge(t, "langs", "go")
 
-	raw, _ := json.Marshal(map[string]any{"key": "langs"})
-	result, _ := Handle(raw)
+	result, _ := Handle(marshalArgs(t, map[string]any{keyField: "langs"}))
+
 	text := result.Content[0].Text
 	if !strings.Contains(text, "golang") || !strings.Contains(text, "go") {
 		t.Errorf("merge dropped a distinct value: %q", text)
@@ -134,8 +148,8 @@ func TestMergeDistinctSubstringsKept(t *testing.T) {
 
 	// Exact repeat is deduplicated.
 	merge(t, "langs", "golang")
-	raw, _ = json.Marshal(map[string]any{"key": "langs"})
-	result, _ = Handle(raw)
+
+	result, _ = Handle(marshalArgs(t, map[string]any{keyField: "langs"}))
 	if strings.Count(result.Content[0].Text, "golang") != 1 {
 		t.Errorf("exact repeat should be deduped: %q", result.Content[0].Text)
 	}
@@ -143,8 +157,9 @@ func TestMergeDistinctSubstringsKept(t *testing.T) {
 
 func merge(t *testing.T, key, value string) {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"key": key, "value": value, "merge": true})
-	if _, err := Handle(raw); err != nil {
+
+	_, err := Handle(marshalArgs(t, map[string]any{keyField: key, valueField: value, "merge": true}))
+	if err != nil {
 		t.Fatal(err)
 	}
 }
@@ -152,25 +167,27 @@ func merge(t *testing.T, key, value string) {
 func TestLRUEviction(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
-	// Fill beyond maxEntries (50)
+	// Fill beyond maxEntries (50).
 	for i := range 55 {
 		saveKV(t, "k"+string(rune('a'+i%26))+string(rune('0'+i/26)), "v")
 	}
 
-	raw, _ := json.Marshal(map[string]any{})
-	result, _ := Handle(raw)
+	result, _ := Handle(marshalArgs(t, map[string]any{}))
 	text := result.Content[0].Text
 
-	// Should have at most 100 entries
+	// Should have at most 100 entries.
 	count := 0
+
 	for l := range strings.SplitSeq(strings.TrimSpace(text), "\n") {
 		if strings.HasPrefix(l, "**") {
 			count++
 		}
 	}
+
 	if count > 100 {
 		t.Errorf("got %d entries, max is 100", count)
 	}
@@ -181,9 +198,11 @@ func TestStorePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !strings.Contains(path, ".llm") {
 		t.Errorf("path should contain .llm: %s", path)
 	}
+
 	if !strings.HasSuffix(path, "memory.json") {
 		t.Errorf("path should end with memory.json: %s", path)
 	}
@@ -192,20 +211,22 @@ func TestStorePath(t *testing.T) {
 func TestRecallCodeFenceFormat(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")
+
 	storePath = func(_ string) (string, error) { return fp, nil }
 	defer func() { storePath = origPath }()
 
 	saveKV(t, "style.indent", "tabs")
 
-	raw, _ := json.Marshal(map[string]any{})
-	result, err := Handle(raw)
+	result, err := Handle(marshalArgs(t, map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	if !strings.Contains(text, "```\n") {
 		t.Errorf("recall list output should be wrapped in code fences, got:\n%s", text)
 	}
+
 	if !strings.HasSuffix(strings.TrimSpace(text), "```") {
 		t.Errorf("recall list output should end with closing code fence, got:\n%s", text)
 	}
@@ -213,8 +234,8 @@ func TestRecallCodeFenceFormat(t *testing.T) {
 
 func saveKV(t *testing.T, key, value string) {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"key": key, "value": value})
-	_, err := Handle(raw)
+
+	_, err := Handle(marshalArgs(t, map[string]any{keyField: key, valueField: value}))
 	if err != nil {
 		t.Fatal(err)
 	}

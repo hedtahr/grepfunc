@@ -1,3 +1,4 @@
+// Package grepimports finds and renders import relationships in source files.
 package grepimports
 
 import (
@@ -13,21 +14,66 @@ import (
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
+// Schema keys and content types shared by the tool definition and callers.
+const (
+	schemaString  = "string"
+	schemaBoolean = "boolean"
+	schemaText    = "text"
+)
+
+// Tool defines the grep_imports MCP tool.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "grep_imports",
-	Description: "Use when you need import relationships: which files import a module, or what one specific file imports. Language-aware parsing (Go, Python, JS/TS, Rust) — native grep can't reliably match import syntax across languages. Returns structured file→symbols output in one call.",
+	Name: "grep_imports",
+	Description: "Use when you need import relationships: which files import a module, or what one " +
+		"specific file imports. Language-aware parsing (Go, Python, JS/TS, Rust) — native grep " +
+		"can't reliably match import syntax across languages. Returns structured file→symbols " +
+		"output in one call.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"module":     {Type: "string", Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any import path containing 'grepfunc'. Omit when using 'file' to list all imports."},
-			"path":       {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
-			"include":    {Type: "string", Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted."},
-			"file":       {Type: "string", Description: "Specific file to inspect. Absolute path or project-relative. If set, lists ALL imports in this file (ignores module/path)."},
-			"compact":    {Type: "boolean", Description: "Terse output. Default false."},
-			"body":       {Type: "boolean", Description: "If true, show matched import lines inline (code block per file). Saves a follow-up grep_context call."},
-			"names_only": {Type: "boolean", Description: "If true, return only file:import_path — no code blocks. Cheapest mode."},
+			"module": {
+				Type:  schemaString,
+				Items: nil,
+				Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any " +
+					"import path containing 'grepfunc'. Omit when using 'file' to list all imports.",
+			},
+			"path": {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Directory to search. Optional — defaults to the opened project root.",
+			},
+			"include": {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted.",
+			},
+			"file": {
+				Type:  schemaString,
+				Items: nil,
+				Description: "Specific file to inspect. Absolute path or project-relative. If set, lists ALL " +
+					"imports in this file (ignores module/path).",
+			},
+			"compact": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Terse output. Default false.",
+			},
+			"body": {
+				Type:  schemaBoolean,
+				Items: nil,
+				Description: "If true, show matched import lines inline (code block per file). Saves a follow-up " +
+					"grep_context call.",
+			},
+			"names_only": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "If true, return only file:import_path — no code blocks. Cheapest mode.",
+			},
 		},
-		Required: []string{},
+		AdditionalProperties: false,
+		Required:             []string{},
 	},
 }
 
@@ -43,7 +89,7 @@ type fileImports struct {
 	imports []importEntry
 }
 
-// package-level compiled regexes
+// package-level compiled regexes.
 var (
 	goSingleImport = regexp.MustCompile(`^\s*import\s+(?:([._\w]+)\s+)?"([^"]+)"`)
 	goGroupLine    = regexp.MustCompile(`^\s*(?:([._\w]+)\s+)?"([^"]+)"`)
@@ -61,115 +107,194 @@ var (
 	rustCrate = regexp.MustCompile(`^\s*extern\s+crate\s+(\w+)`)
 )
 
+// fileArgs are the parsed arguments of a grep_imports call.
+type fileArgs struct {
+	Module    string `json:"module"`
+	Path      string `json:"path"`
+	Include   string `json:"include"`
+	File      string `json:"file"`
+	Compact   bool   `json:"compact"`
+	Body      bool   `json:"body"`
+	NamesOnly bool   `json:"names_only"`
+}
+
+// Handle processes a grep_imports tool call.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a struct {
-		Module    string `json:"module"`
-		Path      string `json:"path"`
-		Include   string `json:"include"`
-		File      string `json:"file"`
-		Compact   bool   `json:"compact"`
-		Body      bool   `json:"body"`
-		NamesOnly bool   `json:"names_only"`
+	var arg fileArgs
+
+	err := json.Unmarshal(raw, &arg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
-	}
-	if a.Module == "" && a.File == "" {
+
+	if arg.Module == "" && arg.File == "" {
 		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: "either 'module' or 'file' is required"}},
+			Content: []server.ToolCallContent{{Type: schemaText, Text: "either 'module' or 'file' is required"}},
+			IsError: false,
 		}, nil
 	}
 
-	// File mode: list all imports in one file
-	if a.File != "" {
-		a.File = server.ResolvePath(a.File)
-		if err := server.CheckBounds(a.File); err != nil {
-			return nil, err
-		}
-		if err := server.CheckBanned(a.File); err != nil {
-			return nil, err
-		}
-		server.SetLastPath(a.File)
-		data, err := os.ReadFile(a.File)
-		if err != nil {
-			return nil, fmt.Errorf("read failed: %v", err)
-		}
-		ext := strings.ToLower(filepath.Ext(a.File))
-		entries := parseImports(data, ext, "")
-		if a.NamesOnly {
-			var buf strings.Builder
-			rel := server.RelPath(a.File)
-			for _, e := range entries {
-				fmt.Fprintf(&buf, "%s:%s\n", rel, e.path)
-			}
-			return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
-		}
-		return renderFileImports(server.RelPath(a.File), entries, a.Compact), nil
+	if arg.File != "" {
+		return handleFileMode(arg)
 	}
 
-	// Search mode
-	if a.Path == "" {
-		a.Path = server.ProjectRoot
+	return handleSearchMode(arg)
+}
+
+// handleFileMode lists all imports in a single file.
+func handleFileMode(arg fileArgs) (*server.ToolCallResult, error) {
+	arg.File = server.ResolvePath(arg.File)
+
+	err := server.CheckBounds(arg.File)
+	if err != nil {
+		return nil, fmt.Errorf("bounds check: %w", err)
+	}
+
+	err = server.CheckBanned(arg.File)
+	if err != nil {
+		return nil, fmt.Errorf("banned path check: %w", err)
+	}
+
+	server.SetLastPath(arg.File)
+
+	data, err := os.ReadFile(arg.File) // #nosec G304 -- paths bounds-checked by server
+	if err != nil {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(arg.File))
+	entries := parseImports(data, ext, "")
+
+	if arg.NamesOnly {
+		var buf strings.Builder
+
+		rel := server.RelPath(arg.File)
+		for _, entry := range entries {
+			fmt.Fprintf(&buf, "%s:%s\n", rel, entry.path)
+		}
+
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+			IsError: false,
+		}, nil
+	}
+
+	return renderFileImports(server.RelPath(arg.File), entries), nil
+}
+
+// handleSearchMode finds files importing the requested module.
+func handleSearchMode(arg fileArgs) (*server.ToolCallResult, error) {
+	if arg.Path == "" {
+		arg.Path = server.ProjectRoot
 	} else {
-		a.Path = server.ResolvePath(a.Path)
-	}
-	if a.Include == "" {
-		a.Include = "*"
+		arg.Path = server.ResolvePath(arg.Path)
 	}
 
+	if arg.Include == "" {
+		arg.Include = "*"
+	}
+
+	results, err := scanImports(arg)
+	if err != nil {
+		return nil, err
+	}
+
+	if arg.NamesOnly {
+		var buf strings.Builder
+
+		fmt.Fprintf(&buf, "%d files importing %q:\n", len(results), arg.Module)
+
+		for _, f := range results {
+			for _, entry := range f.imports {
+				fmt.Fprintf(&buf, "%s:%s\n", f.relPath, entry.path)
+			}
+		}
+
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+			IsError: false,
+		}, nil
+	}
+
+	return renderSearchResults(arg.Module, results, arg.Compact, arg.Body), nil
+}
+
+// scanImports walks the search root collecting matching import entries.
+func scanImports(arg fileArgs) ([]fileImports, error) {
 	var results []fileImports
-	_ = filepath.WalkDir(a.Path, func(path string, d fs.DirEntry, err error) error {
+
+	err := filepath.WalkDir(arg.Path, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			base := d.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" ||
-				base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
+
+		if entry.IsDir() {
+			if isSkippableDir(entry.Name()) {
 				return filepath.SkipDir
 			}
+
 			return nil
 		}
-		if !d.Type().IsRegular() || server.IsBannedPath(path) {
-			return nil
-		}
-		rel, _ := filepath.Rel(a.Path, path)
-		if !grepfunc.MatchGlob(a.Include, rel) {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil || info.Size() > 2*1024*1024 {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if grepfunc.IsBinaryExt(ext) {
-			return nil
-		}
-		if a.Include == "*" && grepfunc.IsNonSourceExt(ext) {
-			return nil
-		}
-		data, err := os.ReadFile(path)
+
+		entries, err := scanImportFile(arg, path, entry)
 		if err != nil {
-			return nil
+			return err
 		}
-		entries := parseImports(data, ext, a.Module)
+
 		if len(entries) > 0 {
 			results = append(results, fileImports{relPath: server.RelPath(path), imports: entries})
 		}
+
 		return nil
 	})
-
-	if a.NamesOnly {
-		var buf strings.Builder
-		fmt.Fprintf(&buf, "%d files importing %q:\n", len(results), a.Module)
-		for _, f := range results {
-			for _, e := range f.imports {
-				fmt.Fprintf(&buf, "%s:%s\n", f.relPath, e.path)
-			}
-		}
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}, nil
+	if err != nil && len(results) == 0 {
+		return nil, fmt.Errorf("walk %s: %w", arg.Path, err)
 	}
-	return renderSearchResults(a.Module, results, a.Compact, a.Body), nil
+
+	return results, nil
+}
+
+// scanImportFile parses one regular file's imports during a walk.
+func scanImportFile(arg fileArgs, path string, entry fs.DirEntry) ([]importEntry, error) {
+	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
+		return nil, nil
+	}
+
+	rel, _ := filepath.Rel(arg.Path, path)
+	if !grepfunc.MatchGlob(arg.Include, rel) {
+		return nil, nil
+	}
+
+	info, err := entry.Info()
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	if info.Size() > 2*1024*1024 {
+		return nil, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	if grepfunc.IsBinaryExt(ext) {
+		return nil, nil
+	}
+
+	if arg.Include == "*" && grepfunc.IsNonSourceExt(ext) {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(path) // #nosec G122,G304 -- paths bounds-checked by server
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	return parseImports(data, ext, arg.Module), nil
+}
+
+// isSkippableDir reports whether a directory should be excluded from searches.
+func isSkippableDir(base string) bool {
+	return base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" ||
+		base == "__pycache__" || strings.HasPrefix(base, ".")
 }
 
 func parseImports(data []byte, ext, filter string) []importEntry {
@@ -189,311 +314,495 @@ func parseImports(data []byte, ext, filter string) []importEntry {
 
 func parseGoImports(data []byte, filter string) []importEntry {
 	var entries []importEntry
+
 	lines := strings.Split(string(data), "\n")
 	inGroup := false
-	for i, line := range lines {
+
+	for lineIdx, line := range lines {
 		if goGroupStart.MatchString(line) {
 			inGroup = true
+
 			continue
 		}
-		if inGroup && strings.TrimSpace(line) == ")" {
+
+		if isGoGroupEnd(line) {
 			inGroup = false
+
 			continue
 		}
+
 		if inGroup {
-			if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "//") {
+			if isBlankOrComment(line) {
 				continue
 			}
+
 			if m := goGroupLine.FindStringSubmatch(line); m != nil {
-				pkg := m[2]
-				if filter == "" || strings.Contains(pkg, filter) {
-					entries = append(entries, importEntry{alias: m[1], path: pkg, line: i + 1})
+				if entry, ok := goEntry(m, lineIdx+1, filter); ok {
+					entries = append(entries, entry)
 				}
 			}
+
 			continue
 		}
-		if m := goSingleImport.FindStringSubmatch(line); m != nil {
-			pkg := m[2]
-			if filter == "" || strings.Contains(pkg, filter) {
-				entries = append(entries, importEntry{alias: m[1], path: pkg, line: i + 1})
-			}
+
+		if entry, ok := goSingleMatch(line, lineIdx+1, filter); ok {
+			entries = append(entries, entry)
 		}
 	}
+
 	return entries
+}
+
+// goSingleMatch parses a single-line import statement, applying the filter.
+func goSingleMatch(line string, lineNum int, filter string) (importEntry, bool) {
+	m := goSingleImport.FindStringSubmatch(line)
+	if m == nil {
+		return importEntry{alias: "", path: "", line: 0, symbols: nil}, false
+	}
+
+	return goEntry(m, lineNum, filter)
+}
+
+// isGoGroupEnd reports whether line closes an import group.
+func isGoGroupEnd(line string) bool {
+	return strings.TrimSpace(line) == ")"
+}
+
+// isBlankOrComment reports whether line is empty or a comment.
+func isBlankOrComment(line string) bool {
+	t := strings.TrimSpace(line)
+
+	return t == "" || strings.HasPrefix(t, "//")
+}
+
+// goEntry builds an importEntry from a regex submatch, applying the filter.
+func goEntry(match []string, line int, filter string) (importEntry, bool) {
+	pkg := match[2]
+	if filter != "" && !strings.Contains(pkg, filter) {
+		return importEntry{alias: "", path: "", line: 0, symbols: nil}, false
+	}
+
+	return importEntry{alias: match[1], path: pkg, line: line, symbols: nil}, true
 }
 
 func parsePyImports(data []byte, filter string) []importEntry {
 	var entries []importEntry
+
 	lines := strings.Split(string(data), "\n")
 
 	inMultiline := false
-	var mlMod string
-	var mlSyms []string
-	var mlLine int
 
-	for i, line := range lines {
+	var (
+		mlMod  string
+		mlSyms []string
+		mlLine int
+	)
+
+	for lineIdx, line := range lines {
 		if inMultiline {
-			trimmed := strings.TrimSpace(line)
-			if strings.Contains(trimmed, ")") {
-				trimmed = trimmed[:strings.Index(trimmed, ")")]
+			if parseMultilineLine(line, &mlSyms) {
+				entries = append(entries, importEntry{alias: "", path: mlMod, line: mlLine, symbols: mlSyms})
 				inMultiline = false
-			}
-			for s := range strings.SplitSeq(trimmed, ",") {
-				s = strings.TrimSpace(s)
-				if before, _, found := strings.Cut(s, " as "); found {
-					s = strings.TrimSpace(before)
-				}
-				if s != "" && s != "*" {
-					mlSyms = append(mlSyms, s)
-				}
-			}
-			if !inMultiline {
-				entries = append(entries, importEntry{path: mlMod, line: mlLine, symbols: mlSyms})
 				mlSyms = nil
 			}
+
 			continue
 		}
 
-		if m := pyFromImport.FindStringSubmatch(line); m != nil {
-			mod := m[1]
+		if match := pyFromImport.FindStringSubmatch(line); match != nil {
+			mod := match[1]
 			if filter != "" && !strings.Contains(mod, filter) {
 				continue
 			}
-			raw := strings.TrimSpace(m[2])
-			if strings.HasSuffix(strings.TrimRight(raw, " \t"), "(") && !strings.Contains(raw, ")") {
+
+			raw := strings.TrimSpace(match[2])
+			if isMultilineImportStart(raw) {
 				inMultiline = true
 				mlMod = mod
-				mlLine = i + 1
+				mlLine = lineIdx + 1
 				mlSyms = nil
-				after := raw[strings.LastIndex(raw, "(")+1:]
-				after = strings.TrimSpace(after)
-				for s := range strings.SplitSeq(after, ",") {
-					s = strings.TrimSpace(s)
-					if before, _, found := strings.Cut(s, " as "); found {
-						s = strings.TrimSpace(before)
-					}
-					if s != "" && s != "*" {
-						mlSyms = append(mlSyms, s)
-					}
-				}
+				parseMultilineLine(afterOpenParen(raw), &mlSyms)
+
 				continue
 			}
-			var syms []string
+
 			raw = strings.Trim(raw, "()")
-			for s := range strings.SplitSeq(raw, ",") {
-				s = strings.TrimSpace(s)
-				if before, _, found := strings.Cut(s, " as "); found {
-					s = strings.TrimSpace(before)
-				}
-				if s != "" && s != "*" {
-					syms = append(syms, s)
-				}
-			}
+			syms := splitSyms(raw)
+
 			if raw == "*" {
 				syms = []string{"*"}
 			}
-			entries = append(entries, importEntry{path: mod, line: i + 1, symbols: syms})
+
+			entries = append(entries, importEntry{alias: "", path: mod, line: lineIdx + 1, symbols: syms})
+
 			continue
 		}
+
 		if m := pyImport.FindStringSubmatch(line); m != nil {
-			for mod := range strings.SplitSeq(m[1], ",") {
-				mod = strings.TrimSpace(mod)
-				if before, _, found := strings.Cut(mod, " as "); found {
-					mod = strings.TrimSpace(before)
-				}
-				if filter == "" || strings.Contains(mod, filter) {
-					entries = append(entries, importEntry{path: mod, line: i + 1})
-				}
-			}
+			entries = appendPyModuleImports(entries, m[1], lineIdx+1, filter)
 		}
 	}
+
 	return entries
+}
+
+// splitSyms splits a comma-separated symbol list, dropping aliases and stars.
+// appendPyModuleImports appends plain "import a, b" style entries.
+func appendPyModuleImports(entries []importEntry, raw string, line int, filter string) []importEntry {
+	for mod := range strings.SplitSeq(raw, ",") {
+		mod = strings.TrimSpace(mod)
+		if before, _, found := strings.Cut(mod, " as "); found {
+			mod = strings.TrimSpace(before)
+		}
+
+		if filter == "" || strings.Contains(mod, filter) {
+			entries = append(entries, importEntry{alias: "", path: mod, line: line, symbols: nil})
+		}
+	}
+
+	return entries
+}
+
+// splitSyms splits a comma-separated symbol list, dropping aliases and stars.
+func splitSyms(raw string) []string {
+	var syms []string
+
+	for sym := range strings.SplitSeq(raw, ",") {
+		sym = strings.TrimSpace(sym)
+		if before, _, found := strings.Cut(sym, " as "); found {
+			sym = strings.TrimSpace(before)
+		}
+
+		if sym != "" && sym != "*" {
+			syms = append(syms, sym)
+		}
+	}
+
+	return syms
+}
+
+// parseMultilineLine appends symbols from a parenthesized import continuation line.
+// It reports whether the closing paren ended the group.
+func parseMultilineLine(line string, syms *[]string) bool {
+	trimmed := strings.TrimSpace(line)
+	closed := false
+
+	if idx := strings.Index(trimmed, ")"); idx >= 0 {
+		trimmed = trimmed[:idx]
+		closed = true
+	}
+
+	for sym := range strings.SplitSeq(trimmed, ",") {
+		sym = strings.TrimSpace(sym)
+		if before, _, found := strings.Cut(sym, " as "); found {
+			sym = strings.TrimSpace(before)
+		}
+
+		if sym != "" && sym != "*" {
+			*syms = append(*syms, sym)
+		}
+	}
+
+	return closed
+}
+
+// isMultilineImportStart reports whether raw opens a parenthesized import group.
+func isMultilineImportStart(raw string) bool {
+	return strings.HasSuffix(strings.TrimRight(raw, " \t"), "(") && !strings.Contains(raw, ")")
+}
+
+// afterOpenParen returns the text following the last "(" in raw.
+func afterOpenParen(raw string) string {
+	idx := strings.LastIndex(raw, "(")
+	if idx < 0 {
+		return ""
+	}
+
+	return raw[idx+1:]
 }
 
 func parseJSImports(data []byte, filter string) []importEntry {
 	var entries []importEntry
-	for i, line := range strings.Split(string(data), "\n") {
+
+	for lineIdx, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "//") {
 			continue
 		}
 
-		if m := jsFromImport.FindStringSubmatch(line); m != nil {
-			mod := m[2]
+		if match := jsFromImport.FindStringSubmatch(line); match != nil {
+			mod := match[2]
 			if filter == "" || strings.Contains(mod, filter) {
-				specifiers := m[1]
-				var syms []string
-				if bm := jsBraces.FindStringSubmatch(specifiers); bm != nil {
-					for s := range strings.SplitSeq(bm[1], ",") {
-						s = strings.TrimSpace(s)
-						if before, _, found := strings.Cut(s, " as "); found {
-							s = strings.TrimSpace(before)
-						}
-						if s != "" {
-							syms = append(syms, s)
-						}
-					}
-				} else {
-					s := strings.TrimSpace(specifiers)
-					if s != "" && s != "type" {
-						syms = []string{s}
-					}
-				}
-				entries = append(entries, importEntry{path: mod, line: i + 1, symbols: syms})
+				entries = append(entries, importEntry{
+					alias:   "",
+					path:    mod,
+					line:    lineIdx + 1,
+					symbols: jsSyms(match[1]),
+				})
 			}
+
 			continue
 		}
 
 		if m := jsSideEffect.FindStringSubmatch(line); m != nil {
 			mod := m[1]
 			if filter == "" || strings.Contains(mod, filter) {
-				entries = append(entries, importEntry{path: mod, line: i + 1})
+				entries = append(entries, importEntry{alias: "", path: mod, line: lineIdx + 1, symbols: nil})
 			}
+
 			continue
 		}
 
-		for _, m := range jsRequire.FindAllStringSubmatch(line, -1) {
-			mod := m[1]
-			if filter == "" || strings.Contains(mod, filter) {
-				entries = append(entries, importEntry{path: mod, line: i + 1})
-			}
+		entries = appendJSRequires(entries, line, lineIdx+1, filter)
+	}
+
+	return entries
+}
+
+// jsSyms extracts named specifiers from an import/export clause.
+// appendJSRequires appends all require() imports found in line.
+func appendJSRequires(entries []importEntry, line string, lineNum int, filter string) []importEntry {
+	for _, m := range jsRequire.FindAllStringSubmatch(line, -1) {
+		mod := m[1]
+		if filter == "" || strings.Contains(mod, filter) {
+			entries = append(entries, importEntry{alias: "", path: mod, line: lineNum, symbols: nil})
 		}
 	}
+
 	return entries
+}
+
+// jsSyms extracts named specifiers from an import/export clause.
+func jsSyms(specifiers string) []string {
+	if bm := jsBraces.FindStringSubmatch(specifiers); bm != nil {
+		return splitList(bm[1], false)
+	}
+
+	s := strings.TrimSpace(specifiers)
+	if s != "" && s != "type" {
+		return []string{s}
+	}
+
+	return nil
+}
+
+// splitList splits a comma-separated list, optionally dropping "*" entries.
+func splitList(raw string, skipStar bool) []string {
+	var syms []string
+
+	for sym := range strings.SplitSeq(raw, ",") {
+		sym = strings.TrimSpace(sym)
+		if before, _, found := strings.Cut(sym, " as "); found {
+			sym = strings.TrimSpace(before)
+		}
+
+		if sym == "" || (skipStar && sym == "*") {
+			continue
+		}
+
+		syms = append(syms, sym)
+	}
+
+	return syms
 }
 
 func parseRustImports(data []byte, filter string) []importEntry {
 	var entries []importEntry
-	for i, line := range strings.Split(string(data), "\n") {
+
+	for lineIdx, line := range strings.Split(string(data), "\n") {
 		if m := rustCrate.FindStringSubmatch(line); m != nil {
 			name := m[1]
 			if filter == "" || strings.Contains(name, filter) {
-				entries = append(entries, importEntry{path: name, line: i + 1})
+				entries = append(entries, importEntry{alias: "", path: name, line: lineIdx + 1, symbols: nil})
 			}
+
 			continue
 		}
+
 		if m := rustUse.FindStringSubmatch(line); m != nil {
 			raw := m[1]
 			if filter == "" || strings.Contains(raw, filter) {
-				if before, after, ok := strings.Cut(raw, "::{"); ok {
-					base := before
-					inner := strings.Trim(after, "}")
-					var syms []string
-					for s := range strings.SplitSeq(inner, ",") {
-						s = strings.TrimSpace(s)
-						if s != "" {
-							syms = append(syms, s)
-						}
-					}
-					entries = append(entries, importEntry{path: base, line: i + 1, symbols: syms})
+				if entry, ok := rustBracedEntry(raw, lineIdx+1); ok {
+					entries = append(entries, entry)
 				} else {
-					// split last :: segment as the symbol
-					if idx := strings.LastIndex(raw, "::"); idx >= 0 {
-						entries = append(entries, importEntry{
-							path:    raw[:idx],
-							line:    i + 1,
-							symbols: []string{raw[idx+2:]},
-						})
-					} else {
-						entries = append(entries, importEntry{path: raw, line: i + 1})
-					}
+					entries = append(entries, rustSimpleEntry(raw, lineIdx+1))
 				}
 			}
 		}
 	}
+
 	return entries
 }
 
-func renderFileImports(relPath string, entries []importEntry, compact bool) *server.ToolCallResult {
-	var buf strings.Builder
-	if compact {
-		fmt.Fprintf(&buf, "%d imports in %s:\n", len(entries), relPath)
-	} else {
-		fmt.Fprintf(&buf, "%d imports in %s:\n", len(entries), relPath)
+// rustBracedEntry parses "base::{a, b}" style use statements.
+func rustBracedEntry(raw string, line int) (importEntry, bool) {
+	before, after, ok := strings.Cut(raw, "::{")
+	if !ok {
+		return importEntry{alias: "", path: "", line: 0, symbols: nil}, false
 	}
-	for _, e := range entries {
-		switch {
-		case len(e.symbols) > 0:
-			fmt.Fprintf(&buf, "  L%-4d %s → {%s}\n", e.line, e.path, strings.Join(e.symbols, ", "))
-		case e.alias != "":
-			fmt.Fprintf(&buf, "  L%-4d %s (as %s)\n", e.line, e.path, e.alias)
-		default:
-			fmt.Fprintf(&buf, "  L%-4d %s\n", e.line, e.path)
+
+	inner := strings.Trim(after, "}")
+	syms := splitList(inner, false)
+
+	return importEntry{alias: "", path: before, line: line, symbols: syms}, true
+}
+
+// rustSimpleEntry parses a plain path or "path::Symbol" use statement.
+func rustSimpleEntry(raw string, line int) importEntry {
+	if idx := strings.LastIndex(raw, "::"); idx >= 0 {
+		return importEntry{
+			alias:   "",
+			path:    raw[:idx],
+			line:    line,
+			symbols: []string{raw[idx+2:]},
 		}
 	}
+
+	return importEntry{alias: "", path: raw, line: line, symbols: nil}
+}
+
+func renderFileImports(relPath string, entries []importEntry) *server.ToolCallResult {
+	var buf strings.Builder
+
+	fmt.Fprintf(&buf, "%d imports in %s:\n", len(entries), relPath)
+
+	for _, entry := range entries {
+		switch {
+		case len(entry.symbols) > 0:
+			fmt.Fprintf(&buf, "  L%-4d %s → {%s}\n", entry.line, entry.path, strings.Join(entry.symbols, ", "))
+		case entry.alias != "":
+			fmt.Fprintf(&buf, "  L%-4d %s (as %s)\n", entry.line, entry.path, entry.alias)
+		default:
+			fmt.Fprintf(&buf, "  L%-4d %s\n", entry.line, entry.path)
+		}
+	}
+
 	if len(entries) == 0 {
 		buf.WriteString("  (no imports found)\n")
 	}
-	return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+		IsError: false,
+	}
 }
 
-func renderSearchResults(module string, results []fileImports, compact bool, body bool) *server.ToolCallResult {
+func renderSearchResults(module string, results []fileImports, compact, body bool) *server.ToolCallResult {
 	var buf strings.Builder
 	if len(results) == 0 {
 		fmt.Fprintf(&buf, "No files import %q.\n", module)
-		return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}
+
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+			IsError: false,
+		}
 	}
+
 	if compact {
 		fmt.Fprintf(&buf, "%d files import %q:\n", len(results), module)
 	} else {
 		fmt.Fprintf(&buf, "%d files importing %q:\n", len(results), module)
 	}
+
 	if !body {
 		buf.WriteString("```\n")
 	}
-	for _, f := range results {
-		var allSyms []string
-		var aliases []string
-		for _, e := range f.imports {
-			allSyms = append(allSyms, e.symbols...)
-			if e.alias != "" {
-				aliases = append(aliases, e.alias)
-			}
-		}
-		lineTag := ""
-		if len(f.imports) == 1 {
-			lineTag = fmt.Sprintf(":L%d", f.imports[0].line)
-		} else if len(f.imports) > 1 {
-			parts := make([]string, len(f.imports))
-			for i, e := range f.imports {
-				parts[i] = fmt.Sprintf("L%d", e.line)
-			}
-			lineTag = " (" + strings.Join(parts, ",") + ")"
-		}
-		switch {
-		case len(allSyms) > 0:
-			fmt.Fprintf(&buf, "%s%s → {%s}\n", f.relPath, lineTag, strings.Join(allSyms, ", "))
-		case len(aliases) > 0:
-			fmt.Fprintf(&buf, "%s%s (as %s)\n", f.relPath, lineTag, strings.Join(aliases, ", "))
-		default:
-			fmt.Fprintf(&buf, "%s%s\n", f.relPath, lineTag)
-		}
+
+	for _, file := range results {
+		allSyms, aliases := collectSymbols(file.imports)
+		writeFileLine(&buf, file, allSyms, aliases)
+
 		if body {
-			// Re-read file to show matched import lines
-			absPath := filepath.Join(server.ProjectRoot, f.relPath)
-			if data, err := os.ReadFile(absPath); err == nil {
-				lines := strings.Split(string(data), "\n")
-				ext := strings.TrimPrefix(filepath.Ext(f.relPath), ".")
-				if ext == "" {
-					ext = "go"
-				}
-				fmt.Fprintf(&buf, "```%s\n", ext)
-				for _, e := range f.imports {
-					if e.line > 0 && e.line <= len(lines) {
-						fmt.Fprintf(&buf, "%s\n", lines[e.line-1])
-					}
-				}
-				fmt.Fprintf(&buf, "```")
-				if compact {
-					buf.WriteByte('\n')
-				} else {
-					buf.WriteString("\n")
-				}
-			}
+			writeFileBody(&buf, file, compact)
 		}
 	}
+
 	if !body {
 		buf.WriteString("```\n")
 	}
-	return &server.ToolCallResult{Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}}}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+		IsError: false,
+	}
+}
+
+// collectSymbols gathers all imported symbols and aliases of one file.
+func collectSymbols(imports []importEntry) ([]string, []string) {
+	allSyms := make([]string, 0)
+	aliases := make([]string, 0)
+
+	for _, entry := range imports {
+		allSyms = append(allSyms, entry.symbols...)
+
+		if entry.alias != "" {
+			aliases = append(aliases, entry.alias)
+		}
+	}
+
+	return allSyms, aliases
+}
+
+// fileLineTag renders the line annotation for a file's imports.
+func fileLineTag(imports []importEntry) string {
+	switch len(imports) {
+	case 1:
+		return fmt.Sprintf(":L%d", imports[0].line)
+	case 0:
+		return ""
+	default:
+		parts := make([]string, len(imports))
+		for i, entry := range imports {
+			parts[i] = fmt.Sprintf("L%d", entry.line)
+		}
+
+		return " (" + strings.Join(parts, ",") + ")"
+	}
+}
+
+// writeFileLine writes one result line for a file.
+func writeFileLine(buf *strings.Builder, file fileImports, allSyms, aliases []string) {
+	lineTag := fileLineTag(file.imports)
+
+	switch {
+	case len(allSyms) > 0:
+		fmt.Fprintf(buf, "%s%s → {%s}\n", file.relPath, lineTag, strings.Join(allSyms, ", "))
+	case len(aliases) > 0:
+		fmt.Fprintf(buf, "%s%s (as %s)\n", file.relPath, lineTag, strings.Join(aliases, ", "))
+	default:
+		fmt.Fprintf(buf, "%s%s\n", file.relPath, lineTag)
+	}
+}
+
+// writeFileBody re-reads the file to show the matched import lines.
+func writeFileBody(buf *strings.Builder, file fileImports, compact bool) {
+	absPath := filepath.Join(server.ProjectRoot, file.relPath)
+
+	data, err := os.ReadFile(absPath) // #nosec G304 -- paths bounds-checked by server
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	ext := strings.TrimPrefix(filepath.Ext(file.relPath), ".")
+	if ext == "" {
+		ext = "go"
+	}
+
+	fmt.Fprintf(buf, "```%s\n", ext)
+
+	for _, entry := range file.imports {
+		if entry.line > 0 && entry.line <= len(lines) {
+			fmt.Fprintf(buf, "%s\n", lines[entry.line-1])
+		}
+	}
+
+	fmt.Fprintf(buf, "```")
+
+	if compact {
+		buf.WriteByte('\n')
+	} else {
+		buf.WriteString("\n")
+	}
 }

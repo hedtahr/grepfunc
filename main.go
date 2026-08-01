@@ -1,3 +1,4 @@
+// Command grepfunc runs the MCP server exposing grep-based code tools.
 package main
 
 import (
@@ -31,35 +32,37 @@ import (
 
 func main() {
 	projectRoot := flag.String("project-root", "", "override project root directory")
+
 	flag.Parse()
+
 	if *projectRoot != "" {
 		server.ProjectRoot = *projectRoot
 	}
 
-	s := server.New("patch-file", "0.9.0")
-	s.Register(patchedit.Tool, patchedit.Handle)
-	s.Register(grepfunc.Tool, grepfunc.Handle)
-	s.Register(grepstruct.Tool, grepstruct.Handle)
-	s.Register(grepcontext.Tool, grepcontext.Handle)
+	srv := server.New("patch-file", "0.9.0")
+	srv.Register(patchedit.Tool, patchedit.Handle)
+	srv.Register(grepfunc.Tool, grepfunc.Handle)
+	srv.Register(grepstruct.Tool, grepstruct.Handle)
+	srv.Register(grepcontext.Tool, grepcontext.Handle)
 
-	s.Register(findrelated.Tool, findrelated.Handle)
-	s.Register(findsymbol.Tool, findsymbol.Handle)
-	s.Register(memory.Tool, memory.Handle)
-	s.Register(filesymbols.Tool, filesymbols.Handle)
-	s.Register(filestats.Tool, filestats.Handle)
-	s.Register(grepimports.Tool, grepimports.Handle)
-	s.Register(greprefs.Tool, greprefs.Handle)
-	s.Register(patchedit.BatchTool, patchedit.BatchHandle)
+	srv.Register(findrelated.Tool, findrelated.Handle)
+	srv.Register(findsymbol.Tool, findsymbol.Handle)
+	srv.Register(memory.Tool, memory.Handle)
+	srv.Register(filesymbols.Tool, filesymbols.Handle)
+	srv.Register(filestats.Tool, filestats.Handle)
+	srv.Register(grepimports.Tool, grepimports.Handle)
+	srv.Register(greprefs.Tool, greprefs.Handle)
+	srv.Register(patchedit.BatchTool, patchedit.BatchHandle)
 
-	s.Register(gitcontext.GitTool, gitcontext.GitHandle)
-	s.Register(counttokens.Tool, counttokens.Handle)
-	s.Register(grepdead.Tool, grepdead.Handle)
-	s.Register(deletesymbol.Tool, deletesymbol.Handle)
-	s.Register(renamesymbol.Tool, renamesymbol.Handle)
-	s.Register(multiread.Tool, multiread.Handle)
-	s.Register(symbolat.Tool, symbolat.Handle)
-	s.Register(movesymbol.Tool, movesymbol.Handle)
-	s.Register(grepreplace.Tool, grepreplace.Handle)
-	s.Register(toolstats.Tool, toolstats.Handle)
-	s.Run()
+	srv.Register(gitcontext.GitTool, gitcontext.GitHandle)
+	srv.Register(counttokens.Tool, counttokens.Handle)
+	srv.Register(grepdead.Tool, grepdead.Handle)
+	srv.Register(deletesymbol.Tool, deletesymbol.Handle)
+	srv.Register(renamesymbol.Tool, renamesymbol.Handle)
+	srv.Register(multiread.Tool, multiread.Handle)
+	srv.Register(symbolat.Tool, symbolat.Handle)
+	srv.Register(movesymbol.Tool, movesymbol.Handle)
+	srv.Register(grepreplace.Tool, grepreplace.Handle)
+	srv.Register(toolstats.Tool, toolstats.Handle)
+	srv.Run()
 }

@@ -1,7 +1,10 @@
+// Package gitdiff shows line-level git diff output.
 package gitdiff
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,19 +15,53 @@ import (
 	"github.com/hedtahr/grepfunc/server"
 )
 
+const (
+	typeText = "text"
+
+	defaultContext  = 3
+	maxContextLines = 10
+)
+
+var errGitDiff = errors.New("git diff failed")
+
+// Tool describes the git_diff tool.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "git_diff",
-	Description: "Show git diff output for a file or all changes. Shows actual line-level changes, avoiding the need to read whole files. Use staged=true for staged changes, base='HEAD~1' to compare commits.",
+	Name: "git_diff",
+	Description: "Show git diff output for a file or all changes. Shows actual line-level changes, avoiding the " +
+		"need to read whole files. Use staged=true for staged changes, base='HEAD~1' to compare commits.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":          {Type: "string", Description: "Specific file to diff. Absolute path or project-relative. Omit for all changed files."},
-			"staged":        {Type: "boolean", Description: "Show staged (--cached) changes. Default false."},
-			"context_lines": {Type: "integer", Description: "Lines of context around changes. Default 3, max 10."},
-			"stat_only":     {Type: "boolean", Description: "Show only --stat summary (no line diff)."},
-			"base":          {Type: "string", Description: "Base commit or branch to diff against, e.g. 'HEAD~1', 'main'. Default: working tree diff."},
+			"path": {
+				Type:        "string",
+				Description: "Specific file to diff. Absolute path or project-relative. Omit for all changed files.",
+				Items:       nil,
+			},
+			"staged": {
+				Type:        "boolean",
+				Description: "Show staged (--cached) changes. Default false.",
+				Items:       nil,
+			},
+			"context_lines": {
+				Type:        "integer",
+				Description: "Lines of context around changes. Default 3, max 10.",
+				Items:       nil,
+			},
+			"stat_only": {
+				Type:        "boolean",
+				Description: "Show only --stat summary (no line diff).",
+				Items:       nil,
+			},
+			"base": {
+				Type:        "string",
+				Description: "Base commit or branch to diff against, e.g. 'HEAD~1', 'main'. Default: working tree diff.",
+				Items:       nil,
+			},
 		},
-		Required: []string{},
+		Required:             []string{},
+		AdditionalProperties: false,
 	},
 }
 
@@ -38,93 +75,134 @@ type args struct {
 
 func findGitRoot(start string) (string, bool) {
 	dir := start
+
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		_, err := os.Stat(filepath.Join(dir, ".git"))
+		if err == nil {
 			return dir, true
 		}
+
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return "", false
 		}
+
 		dir = parent
 	}
 }
 
+// Handle renders the git diff for the requested scope.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a args
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
+	var req args
+
+	err := json.Unmarshal(raw, &req)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	ctx := a.ContextLines
+	ctx := req.ContextLines
 	if ctx <= 0 {
-		ctx = 3
-	}
-	ctx = min(ctx, 10)
-
-	gitArgs := []string{"diff"}
-
-	if a.Base != "" {
-		gitArgs = append(gitArgs, a.Base)
-	} else if a.Staged {
-		gitArgs = append(gitArgs, "--cached")
+		ctx = defaultContext
 	}
 
-	if a.StatOnly {
-		gitArgs = append(gitArgs, "--stat")
-	} else {
-		gitArgs = append(gitArgs, "-U"+strconv.Itoa(ctx))
-	}
+	ctx = min(ctx, maxContextLines)
 
-	if a.Path != "" {
-		resolved := server.ResolvePath(a.Path)
-		if err := server.CheckBounds(resolved); err != nil {
-			return nil, err
-		}
-		if err := server.CheckBanned(resolved); err != nil {
-			return nil, err
-		}
-		gitArgs = append(gitArgs, "--", resolved)
+	gitArgs, err := resolveGitArgs(req, ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	gitRoot, ok := findGitRoot(server.ProjectRoot)
 	if !ok {
 		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: "no git repository found (checked " + server.ProjectRoot + " and parents)"}},
+			Content: []server.ToolCallContent{{
+				Type: typeText,
+				Text: "no git repository found (checked " + server.ProjectRoot + " and parents)",
+			}},
+			IsError: false,
 		}, nil
 	}
 
-	cmd := exec.Command("git", gitArgs...)
-	cmd.Dir = gitRoot
-
-	out, err := cmd.Output()
+	out, err := runGit(gitRoot, gitArgs)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-			return nil, fmt.Errorf("git diff failed: %s", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		if len(out) == 0 {
-			return nil, fmt.Errorf("git diff failed: %v", err)
-		}
+		return nil, err
 	}
 
 	text := strings.TrimRight(string(out), "\n")
 	if text == "" {
 		msg := "No changes"
-		if a.Staged {
+		if req.Staged {
 			msg = "No staged changes"
 		}
+
 		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: msg}},
+			Content: []server.ToolCallContent{{Type: typeText, Text: msg}},
+			IsError: false,
 		}, nil
 	}
 
-	if a.StatOnly {
+	if req.StatOnly {
 		text = "```\n" + text + "\n```"
 	} else {
 		text = "```diff\n" + text + "\n```"
 	}
 
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: text}},
+		Content: []server.ToolCallContent{{Type: typeText, Text: text}},
+		IsError: false,
 	}, nil
+}
+
+func resolveGitArgs(req args, ctx int) ([]string, error) {
+	gitArgs := []string{"diff"}
+
+	if req.Base != "" {
+		gitArgs = append(gitArgs, req.Base)
+	} else if req.Staged {
+		gitArgs = append(gitArgs, "--cached")
+	}
+
+	if req.StatOnly {
+		gitArgs = append(gitArgs, "--stat")
+	} else {
+		gitArgs = append(gitArgs, "-U"+strconv.Itoa(ctx))
+	}
+
+	if req.Path != "" {
+		resolved := server.ResolvePath(req.Path)
+
+		err := server.CheckBounds(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("check bounds: %w", err)
+		}
+
+		err = server.CheckBanned(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("check banned: %w", err)
+		}
+
+		gitArgs = append(gitArgs, "--", resolved)
+	}
+
+	return gitArgs, nil
+}
+
+func runGit(gitRoot string, gitArgs []string) ([]byte, error) {
+	// #nosec G204 -- fixed git binary
+	cmd := exec.CommandContext(context.Background(), "git", gitArgs...)
+	cmd.Dir = gitRoot
+
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("%w: %s", errGitDiff, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+
+		if len(out) == 0 {
+			return nil, fmt.Errorf("git diff failed: %w", err)
+		}
+	}
+
+	return out, nil
 }

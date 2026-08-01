@@ -1,12 +1,15 @@
+// Package grepcontext returns matching lines with surrounding context.
 package grepcontext
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -14,27 +17,104 @@ import (
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
+// Schema keys used in the tool definition.
+const (
+	schemaString  = "string"
+	schemaInteger = "integer"
+	schemaBoolean = "boolean"
+	schemaText    = "text"
+)
+
+// Caps for result sizes.
+const (
+	maxResultsCap = 50
+	maxContextCap = 10
+)
+
+// errPatternRequired is returned when no pattern is supplied.
+var errPatternRequired = errors.New("pattern is required")
+
+// Tool defines the grep_context MCP tool.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "grep_context",
-	Description: "Use when you need matching lines WITH surrounding context for non-function patterns (constants, imports, config values, variable inits). Returns N lines before/after each match, deduplicated — replaces grep -C plus follow-up reads. For bare matches without context, native grep is sufficient.",
+	Name: "grep_context",
+	Description: "Use when you need matching lines WITH surrounding context for non-function patterns " +
+		"(constants, imports, config values, variable inits). Returns N lines before/after each match, " +
+		"deduplicated — replaces grep -C plus follow-up reads. For bare matches without context, native " +
+		"grep is sufficient.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"pattern":        {Type: "string", Description: "Regex to search for"},
-			"path":           {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
-			"include":        {Type: "string", Description: "Glob filter. E.g. **/*.go. Defaults to all source files."},
-			"context_lines":  {Type: "integer", Description: "Lines before/after each match. Default 3, max 10."},
-			"case_sensitive": {Type: "boolean", Description: "Default false."},
-			"max_results":    {Type: "integer", Description: "Max matches. Default 20, max 50."},
-			"offset":         {Type: "integer", Description: "Pagination offset (0-based)."},
-			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
-			"scope":          {Type: "boolean", Description: "Annotate each match with enclosing function/type name. Default false."},
-			"group_by_file":  {Type: "boolean", Description: "Group results under file headers instead of one header per match. Reduces noise for multi-file searches. Default false."},
-			"names_only":     {Type: "boolean", Description: "If true, return only file:line — no context, no code blocks. Cheapest mode."},
-			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited)."},
-			"count_only":     {Type: "boolean", Description: "Return match counts per file only — no content. Zero content tokens."},
+			"pattern": {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Regex to search for",
+			},
+			"path": {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Directory to search. Optional — defaults to the opened project root.",
+			},
+			"include": {
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Glob filter. E.g. **/*.go. Defaults to all source files.",
+			},
+			"context_lines": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Lines before/after each match. Default 3, max 10.",
+			},
+			"case_sensitive": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Default false.",
+			},
+			"max_results": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Max matches. Default 20, max 50.",
+			},
+			"offset": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Pagination offset (0-based).",
+			},
+			"compact": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false.",
+			},
+			"scope": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Annotate each match with enclosing function/type name. Default false.",
+			},
+			"group_by_file": {
+				Type:  schemaBoolean,
+				Items: nil,
+				Description: "Group results under file headers instead of one header per match. Reduces " +
+					"noise for multi-file searches. Default false.",
+			},
+			"names_only": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "If true, return only file:line — no context, no code blocks. Cheapest mode.",
+			},
+			"token_budget": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited).",
+			},
+			"count_only": {
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Return match counts per file only — no content. Zero content tokens.",
+			},
 		},
-		Required: []string{"pattern"},
+		AdditionalProperties: false,
+		Required:             []string{"pattern"},
 	},
 }
 
@@ -63,162 +143,51 @@ type window struct {
 	scope     string
 }
 
+// Handle processes a grep_context tool call.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a args
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
-	}
-	if a.Pattern == "" {
-		return nil, fmt.Errorf("pattern is required")
-	}
+	var arg args
 
-	re, err := grepfunc.CompilePattern(a.Pattern, a.CaseSensitive)
+	err := json.Unmarshal(raw, &arg)
 	if err != nil {
-		return nil, fmt.Errorf("invalid pattern: %v", err)
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	resolved := server.ResolvePath(a.Path)
-
-	if a.MaxResults <= 0 {
-		a.MaxResults = 20
-	}
-	if a.MaxResults > 50 {
-		a.MaxResults = 50
-	}
-	if a.ContextLines <= 0 {
-		a.ContextLines = 3
-	}
-	if a.ContextLines > 10 {
-		a.ContextLines = 10
-	}
-	glob := a.Include
-	if glob == "" {
-		glob = "*"
+	if arg.Pattern == "" {
+		return nil, errPatternRequired
 	}
 
-	var all []window
-	need := a.Offset + a.MaxResults
-	scannedAll := true
+	patternRe, err := grepfunc.CompilePattern(arg.Pattern, arg.CaseSensitive)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pattern: %w", err)
+	}
 
-	filepath.WalkDir(resolved, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			base := d.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" ||
-				base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !d.Type().IsRegular() || server.IsBannedPath(path) {
-			return nil
-		}
+	resolved := server.ResolvePath(arg.Path)
+	applyDefaults(&arg)
 
-		rel, _ := filepath.Rel(resolved, path)
-		if !grepfunc.MatchGlob(glob, rel) {
-			return nil
-		}
+	need := arg.Offset + arg.MaxResults
 
-		info, err := d.Info()
-		if err != nil || info.Size() > 2*1024*1024 {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if grepfunc.IsBinaryExt(ext) {
-			return nil
-		}
-		if glob == "*" && grepfunc.IsNonSourceExt(ext) {
-			return nil
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-
-		rawLines := bytes.Split(data, []byte("\n"))
-		strs := make([]string, len(rawLines))
-		for i, l := range rawLines {
-			strs[i] = string(l)
-		}
-
-		prevEnd := -1
-		var boundaries map[int]int
-		if a.Scope {
-			combinedSig := func(line []byte) bool {
-				return grepfunc.IsFuncSig(line) || grepfunc.IsStructSig(line)
-			}
-			boundaries = grepfunc.MapBlockBoundaries(strsToBytes(strs), combinedSig)
-		}
-		for i, l := range strs {
-			if !re.MatchString(l) {
-				continue
-			}
-			if i <= prevEnd {
-				continue // covered by previous window
-			}
-			start := max(0, i-a.ContextLines)
-			end := min(len(strs)-1, i+a.ContextLines)
-			all = append(all, window{
-				relPath:   rel,
-				matchLine: i + 1,
-				start:     start,
-				end:       end,
-				lines:     strs[start : end+1],
-				scope:     scopeName(strs, i, boundaries),
-			})
-			prevEnd = end
-			if len(all) >= need {
-				scannedAll = false
-				return filepath.SkipAll
-			}
-		}
-		return nil
-	})
+	all, scannedAll, err := scanWindows(arg, patternRe, resolved, need)
+	if err != nil && len(all) == 0 {
+		return nil, fmt.Errorf("walk %s: %w", resolved, err)
+	}
 
 	total := len(all)
-	start := min(a.Offset, total)
-	end := min(a.Offset+a.MaxResults, total)
+	start := min(arg.Offset, total)
+	end := min(arg.Offset+arg.MaxResults, total)
 	page := all[start:end]
 
-	if a.CountOnly {
-		counts := make(map[string]int)
-		var files []string
-		for _, w := range all {
-			if _, seen := counts[w.relPath]; !seen {
-				files = append(files, w.relPath)
-			}
-			counts[w.relPath]++
-		}
-		sort.Strings(files)
-		suffix := ""
-		if !scannedAll {
-			suffix = "+"
-		}
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "%d%s matches for %q\n", total, suffix, a.Pattern)
-		sb.WriteString("```\n")
-		for _, fp := range files {
-			fmt.Fprintf(&sb, "%s: %d\n", fp, counts[fp])
-		}
-		sb.WriteString("```\n")
-		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
-		}, nil
+	if arg.CountOnly {
+		return renderCountOnly(arg, all, total, scannedAll), nil
 	}
 
-	compact := a.Compact
-	var sb strings.Builder
 	if total == 0 {
-		if compact {
-			fmt.Fprintf(&sb, "0 matches %q\n", a.Pattern)
-		} else {
-			fmt.Fprintf(&sb, "0 matches for %q\n", a.Pattern)
-		}
+		var buf strings.Builder
+
+		writeZeroMatches(&buf, arg)
+
 		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: sb.String()}},
+			Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+			IsError: false,
 		}, nil
 	}
 
@@ -226,143 +195,424 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if !scannedAll {
 		suffix = "+"
 	}
-	if compact {
-		fmt.Fprintf(&sb, "%d%s matches %q", total, suffix, a.Pattern)
-	} else {
-		fmt.Fprintf(&sb, "%d%s matches for %q", total, suffix, a.Pattern)
-	}
-	if a.Offset > 0 || end < total {
-		fmt.Fprintf(&sb, " (showing %d\u2013%d)", start+1, end)
-	}
-	sb.WriteByte('\n')
-	if !compact {
-		sb.WriteByte('\n')
-	}
 
-	renderWindow := func(w window) {
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(w.relPath)), ".")
-		if !a.GroupByFile {
-			if w.scope != "" {
-				fmt.Fprintf(&sb, "%s:%d [%s]:\n", w.relPath, w.matchLine, w.scope)
-			} else {
-				fmt.Fprintf(&sb, "%s:%d:\n", w.relPath, w.matchLine)
-			}
-		} else {
-			if w.scope != "" {
-				fmt.Fprintf(&sb, ":%d [%s]\n", w.matchLine, w.scope)
-			} else {
-				fmt.Fprintf(&sb, ":%d\n", w.matchLine)
-			}
-		}
-		sb.WriteString("```" + ext + "\n")
-		for idx, line := range w.lines {
-			lineNum := w.start + idx + 1
-			if lineNum == w.matchLine {
-				fmt.Fprintf(&sb, "> %d: %s\n", lineNum, line)
-			} else {
-				fmt.Fprintf(&sb, "  %d: %s\n", lineNum, line)
-			}
-		}
-		sb.WriteString("```")
-		if compact {
-			sb.WriteByte('\n')
-		} else {
-			sb.WriteString("\n\n")
-		}
-	}
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{
+			Type: schemaText,
+			Text: renderMatches(arg, resolved, page, total, start, end, suffix),
+		}},
+		IsError: false,
+	}, nil
+}
 
-	if a.NamesOnly {
-		sb.WriteString("```\n")
-		for _, w := range page {
-			fmt.Fprintf(&sb, "%s:%d\n", w.relPath, w.matchLine)
-		}
-		sb.WriteString("```\n")
-	} else if a.GroupByFile {
-		type fileGroup struct {
-			relPath string
-			windows []window
-		}
-		var groups []fileGroup
-		seen := map[string]int{}
-		for _, w := range page {
-			if idx, ok := seen[w.relPath]; ok {
-				groups[idx].windows = append(groups[idx].windows, w)
-			} else {
-				seen[w.relPath] = len(groups)
-				groups = append(groups, fileGroup{relPath: w.relPath, windows: []window{w}})
-			}
-		}
-		for _, g := range groups {
-			if compact {
-				fmt.Fprintf(&sb, "%s (%d)\n", g.relPath, len(g.windows))
-			} else {
-				fmt.Fprintf(&sb, "\n%s — %d matches\n", g.relPath, len(g.windows))
-			}
-			for _, w := range g.windows {
-				renderWindow(w)
-			}
-		}
-	} else {
-		for _, w := range page {
-			renderWindow(w)
-		}
+// renderMatches writes the match list with footer and budget handling.
+func renderMatches(arg args, resolved string, page []window, total, start, end int, suffix string) string {
+	var buf strings.Builder
+
+	writeMatchHeader(&buf, arg, total, suffix, start, end)
+
+	switch {
+	case arg.NamesOnly:
+		writeNamesOnly(&buf, page)
+	case arg.GroupByFile:
+		writeGrouped(&buf, arg, page)
+	default:
+		writeFlat(&buf, arg, page)
 	}
 
 	if end < total {
-		fmt.Fprintf(&sb, "%d more. Use offset=%d.\n", total-end, end)
+		fmt.Fprintf(&buf, "%d more. Use offset=%d.\n", total-end, end)
 	}
 
-	info, err2 := os.Stat(resolved)
-	if err2 == nil && !info.IsDir() {
+	info, statErr := os.Stat(resolved)
+	if statErr == nil && !info.IsDir() {
 		server.SetLastPath(resolved)
 	}
 
-	output := sb.String()
-	if a.TokenBudget > 0 && len(output) > a.TokenBudget {
-		// Rebuild in names_only style: file:line only
-		var terse strings.Builder
-		suffix := ""
-		if !scannedAll {
-			suffix = "+"
-		}
-		fmt.Fprintf(&terse, "%d%s matches %q", total, suffix, a.Pattern)
-		if a.Offset > 0 || end < total {
-			fmt.Fprintf(&terse, " (showing %d\u2013%d)", start+1, end)
-		}
-		terse.WriteByte('\n')
-		terse.WriteString("```\n")
-		for _, w := range page {
-			rel := w.relPath
-			if w.scope != "" {
-				fmt.Fprintf(&terse, "%s:%d [%s]\n", rel, w.matchLine, w.scope)
-			} else {
-				fmt.Fprintf(&terse, "%s:%d\n", rel, w.matchLine)
-			}
-		}
-		terse.WriteString("```\n")
-		if end < total {
-			fmt.Fprintf(&terse, "%d more. Use offset=%d.\n", total-end, end)
-		}
-		output = terse.String()
-		if len(output) > a.TokenBudget {
-			output = output[:a.TokenBudget]
-		}
-		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
+	output := buf.String()
+	if arg.TokenBudget > 0 && len(output) > arg.TokenBudget {
+		output = terseOutput(arg, page, total, start, end, suffix)
 	}
 
+	return output
+}
+
+// applyDefaults fills in default values for unset args.
+func applyDefaults(arg *args) {
+	if arg.MaxResults <= 0 {
+		arg.MaxResults = 20
+	}
+
+	if arg.MaxResults > maxResultsCap {
+		arg.MaxResults = maxResultsCap
+	}
+
+	if arg.ContextLines <= 0 {
+		arg.ContextLines = 3
+	}
+
+	if arg.ContextLines > maxContextCap {
+		arg.ContextLines = maxContextCap
+	}
+}
+
+// scanWindows walks the tree collecting context windows around matches.
+func scanWindows(arg args, patternRe *regexp.Regexp, resolved string, need int) ([]window, bool, error) {
+	var all []window
+
+	scannedAll := true
+
+	glob := arg.Include
+
+	if glob == "" {
+		glob = "*"
+	}
+
+	err := filepath.WalkDir(resolved, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if entry.IsDir() {
+			if isSkippableDir(entry.Name()) {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+
+		wins, err := scanWindowFile(arg, resolved, path, glob, entry, patternRe, need-len(all))
+		if err != nil {
+			return err
+		}
+
+		all = append(all, wins...)
+
+		if len(all) >= need {
+			scannedAll = false
+
+			return filepath.SkipAll
+		}
+
+		return nil
+	})
+	if err != nil && len(all) == 0 {
+		return nil, false, fmt.Errorf("walk %s: %w", resolved, err)
+	}
+
+	return all, scannedAll, nil
+}
+
+// scanWindowFile parses one file and builds its context windows.
+func scanWindowFile(arg args, resolved, path, glob string, entry fs.DirEntry,
+	patternRe *regexp.Regexp, need int) ([]window, error) {
+	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
+		return nil, nil
+	}
+
+	rel, _ := filepath.Rel(resolved, path)
+
+	if !grepfunc.MatchGlob(glob, rel) {
+		return nil, nil
+	}
+
+	info, err := entry.Info()
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	if info.Size() > 2*1024*1024 {
+		return nil, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	if grepfunc.IsBinaryExt(ext) {
+		return nil, nil
+	}
+
+	if glob == "*" && grepfunc.IsNonSourceExt(ext) {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(path) // #nosec G122,G304 -- paths bounds-checked by server
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	return matchWindows(data, rel, arg, patternRe, need), nil
+}
+
+// isSkippableDir reports whether a directory should be excluded from searches.
+func isSkippableDir(base string) bool {
+	return base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" ||
+		base == "__pycache__" || strings.HasPrefix(base, ".")
+}
+
+// matchWindows builds context windows for all pattern hits in one file.
+func matchWindows(data []byte, rel string, arg args, patternRe *regexp.Regexp, need int) []window {
+	rawLines := bytes.Split(data, []byte("\n"))
+
+	strs := make([]string, len(rawLines))
+	for i, l := range rawLines {
+		strs[i] = string(l)
+	}
+
+	var boundaries map[int]int
+
+	if arg.Scope {
+		combinedSig := func(line []byte) bool {
+			return grepfunc.IsFuncSig(line) || grepfunc.IsStructSig(line)
+		}
+		boundaries = grepfunc.MapBlockBoundaries(strsToBytes(strs), combinedSig)
+	}
+
+	var windows []window
+
+	prevEnd := -1
+
+	for lineIdx, l := range strs {
+		if !patternRe.MatchString(l) {
+			continue
+		}
+
+		if lineIdx <= prevEnd {
+			continue // covered by previous window
+		}
+
+		start := max(0, lineIdx-arg.ContextLines)
+		end := min(len(strs)-1, lineIdx+arg.ContextLines)
+		windows = append(windows, window{
+			relPath:   rel,
+			matchLine: lineIdx + 1,
+			start:     start,
+			end:       end,
+			lines:     strs[start : end+1],
+			scope:     scopeName(strs, lineIdx, boundaries),
+		})
+		prevEnd = end
+
+		if len(windows) >= need {
+			break
+		}
+	}
+
+	return windows
+}
+
+// renderCountOnly builds the per-file match count output.
+func renderCountOnly(arg args, all []window, total int, scannedAll bool) *server.ToolCallResult {
+	counts := make(map[string]int)
+
+	var files []string
+
+	for _, win := range all {
+		if _, seen := counts[win.relPath]; !seen {
+			files = append(files, win.relPath)
+		}
+
+		counts[win.relPath]++
+	}
+
+	sort.Strings(files)
+
+	suffix := ""
+	if !scannedAll {
+		suffix = "+"
+	}
+
+	var buf strings.Builder
+
+	fmt.Fprintf(&buf, "%d%s matches for %q\n", total, suffix, arg.Pattern)
+	buf.WriteString("```\n")
+
+	for _, file := range files {
+		fmt.Fprintf(&buf, "%s: %d\n", file, counts[file])
+	}
+
+	buf.WriteString("```\n")
+
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: "text", Text: output}},
-	}, nil
+		Content: []server.ToolCallContent{{Type: schemaText, Text: buf.String()}},
+		IsError: false,
+	}
+}
+
+// writeZeroMatches writes the header for an empty result set.
+func writeZeroMatches(buf *strings.Builder, arg args) {
+	if arg.Compact {
+		fmt.Fprintf(buf, "0 matches %q\n", arg.Pattern)
+	} else {
+		fmt.Fprintf(buf, "0 matches for %q\n", arg.Pattern)
+	}
+}
+
+// writeMatchHeader writes the summary line and leading whitespace.
+func writeMatchHeader(buf *strings.Builder, arg args, total int, suffix string, start, end int) {
+	if arg.Compact {
+		fmt.Fprintf(buf, "%d%s matches %q", total, suffix, arg.Pattern)
+	} else {
+		fmt.Fprintf(buf, "%d%s matches for %q", total, suffix, arg.Pattern)
+	}
+
+	if arg.Offset > 0 || end < total {
+		fmt.Fprintf(buf, " (showing %d\u2013%d)", start+1, end)
+	}
+
+	buf.WriteByte('\n')
+
+	if !arg.Compact {
+		buf.WriteByte('\n')
+	}
+}
+
+// writeNamesOnly writes file:line entries only.
+func writeNamesOnly(buf *strings.Builder, page []window) {
+	buf.WriteString("```\n")
+
+	for _, win := range page {
+		fmt.Fprintf(buf, "%s:%d\n", win.relPath, win.matchLine)
+	}
+
+	buf.WriteString("```\n")
+}
+
+// writeGrouped writes matches grouped under file headers.
+func writeGrouped(buf *strings.Builder, arg args, page []window) {
+	for _, group := range groupWindows(page) {
+		if arg.Compact {
+			fmt.Fprintf(buf, "%s (%d)\n", group.relPath, len(group.windows))
+		} else {
+			fmt.Fprintf(buf, "\n%s — %d matches\n", group.relPath, len(group.windows))
+		}
+
+		for _, win := range group.windows {
+			renderWindow(buf, win, arg)
+		}
+	}
+}
+
+// writeFlat writes matches one window per file.
+func writeFlat(buf *strings.Builder, arg args, page []window) {
+	for _, win := range page {
+		renderWindow(buf, win, arg)
+	}
+}
+
+// fileGroup groups windows by file for the group_by_file output.
+type fileGroup struct {
+	relPath string
+	windows []window
+}
+
+// groupWindows buckets windows by their relative path, preserving order.
+func groupWindows(page []window) []fileGroup {
+	var groups []fileGroup
+
+	seen := map[string]int{}
+	for _, win := range page {
+		if idx, ok := seen[win.relPath]; ok {
+			groups[idx].windows = append(groups[idx].windows, win)
+		} else {
+			seen[win.relPath] = len(groups)
+			groups = append(groups, fileGroup{relPath: win.relPath, windows: []window{win}})
+		}
+	}
+
+	return groups
+}
+
+// renderWindow writes one context window.
+func renderWindow(buf *strings.Builder, win window, arg args) {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(win.relPath)), ".")
+	writeWindowHeader(buf, win, arg.GroupByFile)
+
+	buf.WriteString("```" + ext + "\n")
+
+	for idx, line := range win.lines {
+		lineNum := win.start + idx + 1
+		if lineNum == win.matchLine {
+			fmt.Fprintf(buf, "> %d: %s\n", lineNum, line)
+		} else {
+			fmt.Fprintf(buf, "  %d: %s\n", lineNum, line)
+		}
+	}
+
+	buf.WriteString("```")
+
+	if arg.Compact {
+		buf.WriteByte('\n')
+	} else {
+		buf.WriteString("\n\n")
+	}
+}
+
+// writeWindowHeader writes the location line of a window.
+func writeWindowHeader(buf *strings.Builder, win window, groupByFile bool) {
+	if groupByFile {
+		if win.scope != "" {
+			fmt.Fprintf(buf, ":%d [%s]\n", win.matchLine, win.scope)
+		} else {
+			fmt.Fprintf(buf, ":%d\n", win.matchLine)
+		}
+
+		return
+	}
+
+	if win.scope != "" {
+		fmt.Fprintf(buf, "%s:%d [%s]:\n", win.relPath, win.matchLine, win.scope)
+	} else {
+		fmt.Fprintf(buf, "%s:%d:\n", win.relPath, win.matchLine)
+	}
+}
+
+// terseOutput rebuilds output as file:line hits when the budget is exceeded.
+func terseOutput(arg args, page []window, total, start, end int, suffix string) string {
+	var terse strings.Builder
+
+	fmt.Fprintf(&terse, "%d%s matches %q", total, suffix, arg.Pattern)
+
+	if arg.Offset > 0 || end < total {
+		fmt.Fprintf(&terse, " (showing %d\u2013%d)", start+1, end)
+	}
+
+	terse.WriteByte('\n')
+	terse.WriteString("```\n")
+
+	for _, win := range page {
+		if win.scope != "" {
+			fmt.Fprintf(&terse, "%s:%d [%s]\n", win.relPath, win.matchLine, win.scope)
+		} else {
+			fmt.Fprintf(&terse, "%s:%d\n", win.relPath, win.matchLine)
+		}
+	}
+
+	terse.WriteString("```\n")
+
+	if end < total {
+		fmt.Fprintf(&terse, "%d more. Use offset=%d.\n", total-end, end)
+	}
+
+	output := terse.String()
+	if len(output) > arg.TokenBudget {
+		output = output[:arg.TokenBudget]
+	}
+
+	output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
+		"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)
+
+	return output
 }
 
 func scopeName(lines []string, lineIdx int, boundaries map[int]int) string {
 	if boundaries == nil {
 		return ""
 	}
+
 	start, ok := boundaries[lineIdx]
 	if !ok || start >= len(lines) {
 		return ""
 	}
+
 	return grepfunc.EnclosingSymbol(strsToBytes(lines), lineIdx, boundaries)
 }
 
@@ -371,5 +621,6 @@ func strsToBytes(lines []string) [][]byte {
 	for i, s := range lines {
 		b[i] = []byte(s)
 	}
+
 	return b
 }

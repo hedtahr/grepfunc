@@ -11,6 +11,18 @@ import (
 	"go.uber.org/goleak"
 )
 
+// Shared glob patterns and fixture paths used across tests.
+const (
+	globGo        = "*.go"
+	globAllGo     = "**/*.go"
+	globSubGo     = "test/*.go"
+	globSubAllGo  = "test/**/*.go"
+	globAllTestGo = "**/*_test.go"
+	fooGo         = "foo.go"
+	testFooGo     = "test/foo.go"
+	testSubFooGo  = "test/sub/foo.go"
+)
+
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
@@ -141,13 +153,13 @@ func baz() string {
 	// Lines 12-14: func baz → fnStart=12
 
 	check := func(lineIdx, expectedFnStart int) {
-		got, ok := boundaries[lineIdx]
+		got, found := boundaries[lineIdx]
 		if expectedFnStart < 0 {
-			if ok {
+			if found {
 				t.Errorf("line %d should have no function, got fnStart=%d", lineIdx, got)
 			}
 		} else {
-			if !ok {
+			if !found {
 				t.Errorf("line %d should map to fnStart=%d, got nothing", lineIdx, expectedFnStart)
 			} else if got != expectedFnStart {
 				t.Errorf("line %d mapped to fnStart=%d, want %d", lineIdx, got, expectedFnStart)
@@ -206,12 +218,15 @@ func outer() {
 	if got := boundaries[5]; got != 4 {
 		t.Errorf("deepest nested line (depth3) should map to fnStart=4, got %d", got)
 	}
+
 	if got := boundaries[7]; got != 3 {
 		t.Errorf("inner2 line should map to fnStart=3, got %d", got)
 	}
+
 	if got := boundaries[2]; got != 2 {
 		t.Errorf("outer line should map to fnStart=2, got %d", got)
 	}
+
 	if got := boundaries[9]; got != 2 {
 		t.Errorf("more() line should map to fnStart=2, got %d", got)
 	}
@@ -220,7 +235,8 @@ func outer() {
 func TestExtractFuncsIntegration(t *testing.T) {
 	// Write a test file
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
+	filePath := filepath.Join(dir, "test.go")
+
 	code := `package test
 
 // Greet says hello.
@@ -245,12 +261,15 @@ func (h *Handler) Serve(req *Request) error {
 	return h.process(req)
 }
 `
-	if err := os.WriteFile(fp, []byte(code), 0644); err != nil {
+
+	err := os.WriteFile(filePath, []byte(code), 0600)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	pat := regexp.MustCompile(`return`)
-	funcs, err := extractBlocks(fp, pat, 10, IsFuncSig)
+
+	funcs, err := extractBlocks(filePath, pat, 10, IsFuncSig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,9 +282,11 @@ func (h *Handler) Serve(req *Request) error {
 	if funcs[0].Name != "Greet" {
 		t.Errorf("funcs[0].Name = %q, want Greet", funcs[0].Name)
 	}
+
 	if funcs[1].Name != "Add" {
 		t.Errorf("funcs[1].Name = %q, want Add", funcs[1].Name)
 	}
+
 	if funcs[2].Name != "Serve" {
 		t.Errorf("funcs[2].Name = %q, want Serve", funcs[2].Name)
 	}
@@ -283,15 +304,17 @@ func Bar(s string) string { return "hello " + s }
 func Baz(a, b int) int { if a > b { return a } return b }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[2]; got != 2 {
+	if got := boundaries[2]; got != 2 {
 		t.Errorf("Foo start: got %d, want 2", got)
 	}
-	if got := b[3]; got != 3 {
+
+	if got := boundaries[3]; got != 3 {
 		t.Errorf("Bar start: got %d, want 3", got)
 	}
-	if got := b[4]; got != 4 {
+
+	if got := boundaries[4]; got != 4 {
 		t.Errorf("Baz start: got %d, want 4", got)
 	}
 }
@@ -310,18 +333,21 @@ func Bar(s string)
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[2]; got != 2 {
+	if got := boundaries[2]; got != 2 {
 		t.Errorf("Foo sig line: got %d, want 2", got)
 	}
-	if got := b[3]; got != 2 {
+
+	if got := boundaries[3]; got != 2 {
 		t.Errorf("Foo brace line: got %d, want 2", got)
 	}
-	if got := b[4]; got != 2 {
+
+	if got := boundaries[4]; got != 2 {
 		t.Errorf("Foo body line: got %d, want 2", got)
 	}
-	if got := b[5]; got != 2 {
+
+	if got := boundaries[5]; got != 2 {
 		t.Errorf("Foo close line: got %d, want 2", got)
 	}
 }
@@ -338,10 +364,10 @@ func (s *Server) HandleRequest(
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
 	for i := 2; i <= 8; i++ {
-		if got := b[i]; got != 2 {
+		if got := boundaries[i]; got != 2 {
 			t.Errorf("line %d: got %d, want 2", i, got)
 		}
 	}
@@ -359,12 +385,13 @@ func Process[T any](items []T, fn func(T) T) []T {
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[2]; got != 2 {
+	if got := boundaries[2]; got != 2 {
 		t.Errorf("generic func start: got %d, want 2", got)
 	}
-	if got := b[7]; got != 2 {
+
+	if got := boundaries[7]; got != 2 {
 		t.Errorf("generic func close: got %d, want 2", got)
 	}
 }
@@ -385,15 +412,17 @@ pub(crate) fn internal(value: u64) -> Option<u64> {
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[2]; got != 2 {
+	if got := boundaries[2]; got != 2 {
 		t.Errorf("pub fn new: got %d, want 2", got)
 	}
-	if got := b[6]; got != 6 {
+
+	if got := boundaries[6]; got != 6 {
 		t.Errorf("fn process: got %d, want 6", got)
 	}
-	if got := b[10]; got != 10 {
+
+	if got := boundaries[10]; got != 10 {
 		t.Errorf("pub(crate) fn internal: got %d, want 10", got)
 	}
 }
@@ -410,12 +439,13 @@ func  Foo()  int  {
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[2]; got != 2 {
-		t.Errorf("extra spaces func: got %d, want 2", got)
+	if got := boundaries[2]; got != 2 {
+		t.Errorf("extra space func: got %d, want 2", got)
 	}
-	if got := b[6]; got != 6 {
+
+	if got := boundaries[6]; got != 6 {
 		t.Errorf("tab-indented func: got %d, want 6", got)
 	}
 }
@@ -433,18 +463,21 @@ func TestNestedClosures(t *testing.T) {
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[0]; got != 0 {
+	if got := boundaries[0]; got != 0 {
 		t.Errorf("main: got %d, want 0", got)
 	}
-	if got := b[1]; got != 1 {
+
+	if got := boundaries[1]; got != 1 {
 		t.Errorf("function(data): got %d, want 1", got)
 	}
-	if got := b[2]; got != 2 {
+
+	if got := boundaries[2]; got != 2 {
 		t.Errorf("function(err,result): got %d, want 2", got)
 	}
-	if got := b[4]; got != 4 {
+
+	if got := boundaries[4]; got != 4 {
 		t.Errorf("function(): got %d, want 4", got)
 	}
 }
@@ -459,10 +492,10 @@ func Incomplete() {
 // missing closing brace for func
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
 	for i := 2; i < len(lines); i++ {
-		if got := b[i]; got != 2 {
+		if got := boundaries[i]; got != 2 {
 			t.Errorf("line %d: got %d, want 2 (EOF fallback)", i, got)
 		}
 	}
@@ -470,7 +503,7 @@ func Incomplete() {
 
 func TestDedupSameFunc(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "dedup.go")
+	filePath := filepath.Join(dir, "dedup.go")
 	code := `package test
 
 func Process() error {
@@ -478,31 +511,42 @@ func Process() error {
 		input,
 		opts,
 	)
-}
-`
-	os.WriteFile(fp, []byte(code), 0644)
+	}
+	`
+
+	err := os.WriteFile(filePath, []byte(code), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pat := regexp.MustCompile(`return`)
-	funcs, _ := extractBlocks(fp, pat, 10, IsFuncSig)
+
+	funcs, _ := extractBlocks(filePath, pat, 10, IsFuncSig)
 	if len(funcs) != 1 {
 		t.Fatalf("got %d funcs, want 1 (deduped)", len(funcs))
 	}
+
 	if funcs[0].Name != "Process" {
 		t.Errorf("Name = %q, want Process", funcs[0].Name)
 	}
 }
 
 func TestTemplateLiteralBraces(t *testing.T) {
-	code := "function greet(name) {\n\tconst msg = `Hello ${name}, welcome!`;\n\tconst detail = `Your score: ${scores.reduce((a,b) => a+b, 0)}`;\n\treturn msg + \" \" + detail;\n}\n"
+	code := "function greet(name) {\n" +
+		"\tconst msg = `Hello ${name}, welcome!`;\n" +
+		"\tconst detail = `Your score: ${scores.reduce((a,b) => a+b, 0)}`;\n" +
+		"\treturn msg + \" \" + detail;\n}\n"
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[0]; got != 0 {
+	if got := boundaries[0]; got != 0 {
 		t.Errorf("greet start: got %d, want 0", got)
 	}
-	if got := b[3]; got != 0 {
+
+	if got := boundaries[3]; got != 0 {
 		t.Errorf("greet close: got %d, want 0", got)
 	}
+
 	o, c := braceDelta([]byte("`Hello ${name} welcome`"))
 	if o != 0 || c != 0 {
 		t.Errorf("template literal braces should be ignored: got (%d,%d)", o, c)
@@ -522,26 +566,33 @@ func TestRustClosureChains(t *testing.T) {
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := b[0]; got != 0 {
+	if got := boundaries[0]; got != 0 {
 		t.Errorf("fn process: got %d, want 0", got)
 	}
-	if got := b[2]; got != 2 {
+
+	if got := boundaries[2]; got != 2 {
 		t.Errorf("first closure: got %d, want 2", got)
 	}
-	if got := b[5]; got != 5 {
+
+	if got := boundaries[5]; got != 5 {
 		t.Errorf("second closure: got %d, want 5", got)
 	}
 }
 
 func TestPythonStyle(t *testing.T) {
-	code := "def hello(name):\n    return f\"Hello {name}\"\n\nasync def fetch(url):\n    async with session.get(url) as resp:\n        return await resp.json()\n"
+	code := "def hello(name):\n" +
+		"    return f\"Hello {name}\"\n\n" +
+		"async def fetch(url):\n" +
+		"    async with session.get(url) as resp:\n" +
+		"        return await resp.json()\n"
 	lines := toLines([]byte(code))
 
 	if !IsFuncSig(lines[0]) {
 		t.Error("IsFuncSig should detect 'def hello(name):'")
 	}
+
 	if !IsFuncSig(lines[3]) {
 		t.Error("IsFuncSig should detect 'async def fetch(url):'")
 	}
@@ -560,10 +611,10 @@ func TestCommentBlockInsideFunc(t *testing.T) {
 }
 `
 	lines := toLines([]byte(code))
-	b := mapBlockBoundaries(lines, IsFuncSig)
+	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
 	for i := range lines {
-		if got := b[i]; got != 0 {
+		if got := boundaries[i]; got != 0 {
 			t.Errorf("line %d: got %d, want 0 (block comment with braces)", i, got)
 		}
 	}
@@ -571,19 +622,23 @@ func TestCommentBlockInsideFunc(t *testing.T) {
 
 func TestSearchIntegration(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
+	filePath := filepath.Join(dir, "test.go")
+
 	code := `package test
 
 func Foo() int { return 1 }
 func Bar() string { return "bar" }
 func FooBar() int { return Foo() + 1 }
 `
-	if err := os.WriteFile(fp, []byte(code), 0644); err != nil {
+
+	err := os.WriteFile(filePath, []byte(code), 0600)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	pat := regexp.MustCompile(`return`)
-	results, err := Search(dir, "*.go", pat, 10, IsFuncSig)
+
+	results, err := Search(dir, globGo, pat, 10, IsFuncSig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,12 +646,14 @@ func FooBar() int { return Foo() + 1 }
 	if len(results) != 3 {
 		t.Fatalf("got %d results, want 3", len(results))
 	}
-	for _, r := range results {
-		if r.Line < 1 {
-			t.Errorf("invalid line number for %s", r.Name)
+
+	for _, res := range results {
+		if res.Line < 1 {
+			t.Errorf("invalid line number for %s", res.Name)
 		}
-		if r.Body == "" {
-			t.Errorf("empty body for %s", r.Name)
+
+		if res.Body == "" {
+			t.Errorf("empty body for %s", res.Name)
 		}
 	}
 }
@@ -607,32 +664,32 @@ func TestMatchGlob(t *testing.T) {
 		want          bool
 	}{
 		// Simple base-name patterns
-		{"*.go", "foo.go", true},
-		{"*.go", "foo.rs", false},
-		{"foo.*", "foo.go", true},
-		{"f??.go", "foo.go", true},
+		{globGo, fooGo, true},
+		{globGo, "foo.rs", false},
+		{"foo.*", fooGo, true},
+		{"f??.go", fooGo, true},
 
 		// Subdirectory patterns
-		{"test/*.go", "test/foo.go", true},
-		{"test/*.go", "test/sub/foo.go", false},
-		{"sub/*.go", "test/foo.go", false},
+		{globSubGo, testFooGo, true},
+		{globSubGo, testSubFooGo, false},
+		{"sub/*.go", testFooGo, false},
 
 		// ** recursive patterns
-		{"**/*.go", "foo.go", true},
-		{"**/*.go", "test/foo.go", true},
-		{"**/*.go", "a/b/c/foo.go", true},
-		{"**/*.go", "foo.rs", false},
-		{"test/**/*.go", "test/foo.go", true},
-		{"test/**/*.go", "test/sub/foo.go", true},
-		{"test/**/*.go", "test/sub/deep/foo.go", true},
-		{"test/**/*.go", "other/foo.go", false},
+		{globAllGo, fooGo, true},
+		{globAllGo, testFooGo, true},
+		{globAllGo, "a/b/c/foo.go", true},
+		{globAllGo, "foo.rs", false},
+		{globSubAllGo, testFooGo, true},
+		{globSubAllGo, testSubFooGo, true},
+		{globSubAllGo, "test/sub/deep/foo.go", true},
+		{globSubAllGo, "other/foo.go", false},
 
 		// Mixed patterns
-		{"**/test/**", "test/foo.go", true},
-		{"**/*_test.go", "foo_test.go", true},
-		{"**/*_test.go", "test/foo_test.go", true},
-		{"**/*_test.go", "test/sub/foo_test.go", true},
-		{"**/*_test.go", "test/sub/foo.go", false},
+		{"**/test/**", testFooGo, true},
+		{globAllTestGo, "foo_test.go", true},
+		{globAllTestGo, "test/foo_test.go", true},
+		{globAllTestGo, "test/sub/foo_test.go", true},
+		{globAllTestGo, testSubFooGo, false},
 	}
 
 	for _, tt := range tests {
@@ -646,21 +703,38 @@ func TestMatchGlob(t *testing.T) {
 func TestGlobSearchSubdirs(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create nested dirs
-	os.MkdirAll(filepath.Join(dir, "pkg", "sub"), 0755)
-	os.MkdirAll(filepath.Join(dir, "cmd"), 0755)
+	err := os.MkdirAll(filepath.Join(dir, "pkg", "sub"), 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	os.WriteFile(filepath.Join(dir, "pkg", "sub", "lib.go"),
-		[]byte("package sub\nfunc Lib() int { return 42 }"), 0644)
-	os.WriteFile(filepath.Join(dir, "cmd", "main.go"),
-		[]byte("package main\nfunc main() { return }"), 0644)
-	os.WriteFile(filepath.Join(dir, "root.go"),
-		[]byte("package root\nfunc Root() string { return \"root\" }"), 0644)
+	err = os.MkdirAll(filepath.Join(dir, "cmd"), 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "pkg", "sub", "lib.go"),
+		[]byte("package sub\nfunc Lib() int { return 42 }"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "cmd", "main.go"),
+		[]byte("package main\nfunc main() { return }"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "root.go"),
+		[]byte("package root\nfunc Root() string { return \"root\" }"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pat := regexp.MustCompile(`return`)
 
 	// **/*.go should find all 3
-	results, _ := Search(dir, "**/*.go", pat, 10, IsFuncSig)
+	results, _ := Search(dir, globAllGo, pat, 10, IsFuncSig)
 	if len(results) != 3 {
 		t.Fatalf("**/*.go: got %d, want 3", len(results))
 	}
@@ -670,12 +744,13 @@ func TestGlobSearchSubdirs(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("pkg/**/*.go: got %d, want 1", len(results))
 	}
+
 	if results[0].Name != "Lib" {
 		t.Errorf("pkg/**/*.go: Name = %q, want Lib", results[0].Name)
 	}
 
 	// Simple *.go should find all .go at any depth (like ripgrep --include)
-	results, _ = Search(dir, "*.go", pat, 10, IsFuncSig)
+	results, _ = Search(dir, globGo, pat, 10, IsFuncSig)
 	if len(results) != 3 {
 		t.Fatalf("*.go: got %d, want 3 (all .go files at any depth)", len(results))
 	}
@@ -683,24 +758,33 @@ func TestGlobSearchSubdirs(t *testing.T) {
 
 func TestBodyFalseSignatureOnly(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
+	filePath := filepath.Join(dir, "test.go")
 	code := `package test
 
 func Foo() int { return 1 }
 func Bar() string { return "bar" }
 `
-	os.WriteFile(fp, []byte(code), 0644)
 
-	raw, _ := json.Marshal(map[string]any{
-		"pattern": "return",
-		"path":    dir,
-		"include": "*.go",
-		"body":    false,
+	err := os.WriteFile(filePath, []byte(code), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		schemaPattern: "return",
+		schemaPath:    dir,
+		schemaInclude: globGo,
+		schemaBody:    false,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Handle(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	if text == "" {
 		t.Fatal("empty output")
@@ -717,7 +801,7 @@ func Bar() string { return "bar" }
 
 func TestNoFalsePositiveExactMatch(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
+	filePath := filepath.Join(dir, "test.go")
 	// Exact structure matching grepfunc/tool.go's var block
 	code := "package test\n" +
 		"\n" +
@@ -727,7 +811,8 @@ func TestNoFalsePositiveExactMatch(t *testing.T) {
 		"\n" +
 		"var Tool = Config{\n" +
 		"\tName:        \"grep_func\",\n" +
-		"\tDescription: \"Search for functions/methods matching a pattern and return complete function bodies. Handles braces with string awareness.\",\n" +
+		"\tDescription: \"Search for functions/methods matching a pattern and return complete " +
+		"function bodies. Handles braces with string awareness.\",\n" +
 		"\tInputSchema: InputSchema{\n" +
 		"\t\tType: \"object\",\n" +
 		"\t\tProperties: map[string]Property{\n" +
@@ -737,18 +822,27 @@ func TestNoFalsePositiveExactMatch(t *testing.T) {
 		"}\n" +
 		"\n" +
 		"func Handle(req Request) error { return nil }\n"
-	os.WriteFile(fp, []byte(code), 0644)
 
-	raw, _ := json.Marshal(map[string]any{
-		"pattern": "func.*Handle",
-		"path":    dir,
-		"include": "*.go",
-		"body":    false,
+	err := os.WriteFile(filePath, []byte(code), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		schemaPattern: "func.*Handle",
+		schemaPath:    dir,
+		schemaInclude: globGo,
+		schemaBody:    false,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Handle(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	// Must NOT match the Description line (which contains "func" and "Handle")
 	if strings.Contains(text, "Description") {
@@ -762,19 +856,28 @@ func TestNoFalsePositiveExactMatch(t *testing.T) {
 
 func TestBodyTrueIncludesBody(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
-	os.WriteFile(fp, []byte("package test\nfunc Foo() int { return 1 }"), 0644)
+	filePath := filepath.Join(dir, "test.go")
 
-	raw, _ := json.Marshal(map[string]any{
-		"pattern": "return",
-		"path":    dir,
-		"include": "*.go",
-		"body":    true,
+	err := os.WriteFile(filePath, []byte("package test\nfunc Foo() int { return 1 }"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		schemaPattern: "return",
+		schemaPath:    dir,
+		schemaInclude: globGo,
+		schemaBody:    true,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Handle(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	text := result.Content[0].Text
 	// Must contain code block markers
 	if !strings.Contains(text, "\x60\x60\x60") {

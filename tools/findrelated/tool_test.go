@@ -10,15 +10,37 @@ import (
 	"github.com/hedtahr/grepfunc/server"
 )
 
-func TestHandle(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "user.go"), []byte("package main"), 0644)
+const (
+	userName   = "user"
+	svcName    = "svc"
+	simpleName = "simple"
+	fooFile    = "foo.go"
+)
 
-	raw, _ := json.Marshal(map[string]any{"path": filepath.Join(dir, "user.go")})
-	result, err := Handle(raw)
+func marshalArgs(t *testing.T, args map[string]any) json.RawMessage {
+	t.Helper()
+
+	raw, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	return raw
+}
+
+func TestHandle(t *testing.T) {
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "user.go"), []byte("package main"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Handle(marshalArgs(t, map[string]any{pathKey: filepath.Join(dir, "user.go")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if len(result.Content) == 0 {
 		t.Fatal("empty content")
 	}
@@ -26,14 +48,18 @@ func TestHandle(t *testing.T) {
 
 func TestHandleBannedPath(t *testing.T) {
 	orig := server.ProjectRoot
+
 	server.ProjectRoot = t.TempDir()
 	defer func() { server.ProjectRoot = orig }()
 
 	banned := filepath.Join(server.ProjectRoot, ".env")
-	os.WriteFile(banned, []byte("SECRET=x\n"), 0600)
 
-	raw, _ := json.Marshal(map[string]any{"path": banned})
-	_, err := Handle(raw)
+	err := os.WriteFile(banned, []byte("SECRET=x\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Handle(marshalArgs(t, map[string]any{pathKey: banned}))
 	if err == nil || !strings.Contains(err.Error(), "access denied") {
 		t.Errorf("expected access-denied error for .env, got %v", err)
 	}
@@ -41,13 +67,14 @@ func TestHandleBannedPath(t *testing.T) {
 
 func TestFindTestFile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "user.go"), []byte("package main"), 0644)
-	os.WriteFile(filepath.Join(dir, "user_test.go"), []byte("package main_test"), 0644)
-	os.WriteFile(filepath.Join(dir, "unrelated.go"), []byte("package main"), 0644)
+	writeFile(t, dir, "user.go", "package main")
+	writeFile(t, dir, "user_test.go", "package main_test")
+	writeFile(t, dir, "unrelated.go", "package main")
 
 	related := findRelated(filepath.Join(dir, "user.go"))
 	foundTest := false
 	foundSibling := false
+
 	for _, r := range related {
 		switch filepath.Base(r) {
 		case "user_test.go":
@@ -56,12 +83,15 @@ func TestFindTestFile(t *testing.T) {
 			foundSibling = true
 		}
 	}
+
 	if !foundTest {
 		t.Errorf("expected user_test.go in results, got %v", related)
 	}
+
 	if !foundSibling {
 		t.Errorf("expected unrelated.go (sibling) in results, got %v", related)
 	}
+
 	if len(related) != 2 {
 		t.Errorf("expected 2 related files, got %d: %v", len(related), related)
 	}
@@ -69,17 +99,20 @@ func TestFindTestFile(t *testing.T) {
 
 func TestFindMockFile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "service.go"), []byte("package main"), 0644)
-	os.WriteFile(filepath.Join(dir, "service_mock.go"), []byte("package main"), 0644)
+	writeFile(t, dir, "service.go", "package main")
+	writeFile(t, dir, "service_mock.go", "package main")
 
 	related := findRelated(filepath.Join(dir, "service.go"))
 	found := false
+
 	for _, r := range related {
 		if filepath.Base(r) == "service_mock.go" {
 			found = true
+
 			break
 		}
 	}
+
 	if !found {
 		t.Errorf("expected service_mock.go in results, got %v", related)
 	}
@@ -87,17 +120,20 @@ func TestFindMockFile(t *testing.T) {
 
 func TestFindSpecFile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "calc.ts"), []byte("export function add() {}"), 0644)
-	os.WriteFile(filepath.Join(dir, "calc.spec.ts"), []byte("describe('calc')"), 0644)
+	writeFile(t, dir, "calc.ts", "export function add() {}")
+	writeFile(t, dir, "calc.spec.ts", "describe('calc')")
 
 	related := findRelated(filepath.Join(dir, "calc.ts"))
 	found := false
+
 	for _, r := range related {
 		if filepath.Base(r) == "calc.spec.ts" {
 			found = true
+
 			break
 		}
 	}
+
 	if !found {
 		t.Errorf("expected calc.spec.ts in results, got %v", related)
 	}
@@ -107,12 +143,12 @@ func TestCategorize(t *testing.T) {
 	tests := []struct {
 		related, original, want string
 	}{
-		{"foo_test.go", "foo.go", "🧪 test"},
-		{"test_foo.go", "foo.go", "🧪 test"},
-		{"foo.spec.ts", "foo.ts", "🧪 test"},
-		{"foo_mock.go", "foo.go", "🎭 mock/stub"},
-		{"mock_foo.go", "foo.go", "🎭 mock/stub"},
-		{"/other/foo.go", "/src/foo.go", "📁 other dir"},
+		{"foo_test.go", fooFile, catTest},
+		{"test_foo.go", fooFile, catTest},
+		{"foo.spec.ts", "foo.ts", catTest},
+		{"foo_mock.go", fooFile, catMock},
+		{"mock_foo.go", fooFile, catMock},
+		{"/other/foo.go", "/src/foo.go", catOtherDir},
 		{"/src/bar.go", "/src/foo.go", "📄 sibling"},
 	}
 	for _, tt := range tests {
@@ -129,22 +165,22 @@ func TestIsRelatedName(t *testing.T) {
 		want        bool
 	}{
 		// Test patterns
-		{"user", "user_test.go", true},
-		{"user", "user.test.ts", true},
-		{"user", "test_user.py", true},
-		{"user", "userTest.java", true},
-		{"user", "user.spec.ts", true},
-		{"user", "user_spec.rb", true},
+		{userName, "user_test.go", true},
+		{userName, "user.test.ts", true},
+		{userName, "test_user.py", true},
+		{userName, "userTest.java", true},
+		{userName, "user.spec.ts", true},
+		{userName, "user_spec.rb", true},
 		// Mock patterns
-		{"svc", "svc_mock.go", true},
-		{"svc", "mock_svc.go", true},
-		{"svc", "svcMock.go", true},
+		{svcName, "svc_mock.go", true},
+		{svcName, "mock_svc.go", true},
+		{svcName, "svcMock.go", true},
 		// Same name
 		{"config", "config.go", true},
 		// Not related
-		{"user", "account.go", false},
-		{"user", "user_util.go", false},
-		{"user", "user_handler.go", false},
+		{userName, "account.go", false},
+		{userName, "user_util.go", false},
+		{userName, "user_handler.go", false},
 	}
 	for _, tt := range tests {
 		got := isRelatedName(tt.name, tt.entry)
@@ -156,8 +192,16 @@ func TestIsRelatedName(t *testing.T) {
 
 func TestFindProjectRoot(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "src", "pkg"), 0755)
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0644)
+
+	err := os.MkdirAll(filepath.Join(dir, "src", "pkg"), 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	got := server.FindProjectRoot(filepath.Join(dir, "src", "pkg"))
 	if got != dir {
@@ -168,7 +212,7 @@ func TestFindProjectRoot(t *testing.T) {
 func TestToSnake(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"HelloWorld", "hello_world"},
-		{"simple", "simple"},
+		{simpleName, simpleName},
 		{"HTMLElement", "h_t_m_l_element"},
 	}
 	for _, tt := range tests {
@@ -182,7 +226,7 @@ func TestToSnake(t *testing.T) {
 func TestToCamel(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"hello_world", "HelloWorld"},
-		{"simple", "Simple"},
+		{simpleName, "Simple"},
 		{"xml_parser", "XmlParser"},
 	}
 	for _, tt := range tests {
@@ -190,5 +234,14 @@ func TestToCamel(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("toCamel(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+
+	err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600)
+	if err != nil {
+		t.Fatal(err)
 	}
 }

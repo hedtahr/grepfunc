@@ -1,8 +1,11 @@
+// Package movesymbol moves a named symbol between files.
 package movesymbol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"regexp"
 	"strings"
@@ -11,19 +14,52 @@ import (
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
 )
 
+const (
+	typeString       = "string"
+	maxSearchResults = 10
+	newFileMode      = 0600
+	maxFileSize      = 2 * 1024 * 1024
+)
+
+var (
+	errNameRequired   = errors.New("name is required")
+	errSymbolNotFound = errors.New("symbol not found")
+	errInvalidRange   = errors.New("invalid line range")
+	errInsertLine     = errors.New("insert line must be >= 1")
+	errDstLineHasCode = errors.New("dst line has code")
+)
+
+// Tool describes the move_symbol tool.
+//
+//nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name:        "move_symbol",
-	Description: "Move a named symbol (function, method, struct, interface, enum, class) from a source file to a destination file. Removes the symbol from src and inserts it into dst at the specified line (or appends if no line given).",
+	Name: "move_symbol",
+	Description: "Move a named symbol (function, method, struct, interface, enum, class) from a source file to a " +
+		"destination file. Removes the symbol from src and inserts it into dst at the specified line (or appends if " +
+		"no line given).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name":    {Type: "string", Description: "Name of the symbol to move. Exact match."},
-			"src":     {Type: "string", Description: "Source file containing the symbol. Absolute path or project-relative."},
-			"dst":     {Type: "string", Description: "Destination file. Absolute path or project-relative."},
-			"line":    {Type: "integer", Description: "Line number in dst to insert before. If omitted, appends to end of dst. If the target line has non-whitespace code, the operation is refused."},
-			"dry_run": {Type: "boolean", Description: "Preview changes without writing files."},
+			"name": {Type: typeString, Description: "Name of the symbol to move. Exact match.", Items: nil},
+			"src": {
+				Type:        typeString,
+				Description: "Source file containing the symbol. Absolute path or project-relative.",
+				Items:       nil,
+			},
+			"dst": {
+				Type:        typeString,
+				Description: "Destination file. Absolute path or project-relative.",
+				Items:       nil,
+			},
+			"line": {
+				Type:        "integer",
+				Description: "Line number in dst to insert before. If omitted, appends to end of dst.",
+				Items:       nil,
+			},
+			"dry_run": {Type: "boolean", Description: "Preview changes without writing files.", Items: nil},
 		},
-		Required: []string{"name", "src", "dst"},
+		Required:             []string{"name", "src", "dst"},
+		AdditionalProperties: false,
 	},
 }
 
@@ -35,117 +71,199 @@ type args struct {
 	DryRun bool   `json:"dry_run"`
 }
 
+// Handle moves a symbol from src to dst.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
-	var a args
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %v", err)
-	}
-	if a.Name == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-	a.Src = server.ResolvePath(a.Src)
-	a.Dst = server.ResolvePath(a.Dst)
-	if err := server.CheckBounds(a.Src); err != nil {
-		return nil, err
-	}
-	if err := server.CheckBounds(a.Dst); err != nil {
-		return nil, err
-	}
-	if err := server.CheckBanned(a.Src); err != nil {
-		return nil, err
-	}
-	if err := server.CheckBanned(a.Dst); err != nil {
-		return nil, err
-	}
-
-	// Find symbol in src using exact name match.
-	pat, _ := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(a.Name) + `\b`)
-	combined := func(line []byte) bool { return grepfunc.IsFuncSig(line) || grepfunc.IsStructSig(line) }
-	results, err := grepfunc.Search(a.Src, "*", pat, 10, combined)
+	req, err := parseArgs(raw)
 	if err != nil {
-		return nil, fmt.Errorf("search src: %v", err)
+		return nil, err
 	}
 
-	var match *grepfunc.FuncMatch
-	for i, r := range results {
-		if strings.EqualFold(r.Name, a.Name) {
-			match = &results[i]
-			break
-		}
-	}
-	if match == nil {
-		return nil, fmt.Errorf("symbol %q not found in %s", a.Name, server.RelPath(a.Src))
-	}
-
-	// Read src, remove symbol lines.
-	srcData, err := os.ReadFile(a.Src)
+	err = checkPaths(req.Src, req.Dst)
 	if err != nil {
-		return nil, fmt.Errorf("read src: %v", err)
+		return nil, err
 	}
+
+	pat, _ := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(req.Name) + `\b`)
+
+	match, err := findSymbol(req.Src, req.Name, pat)
+	if err != nil {
+		return nil, err
+	}
+
+	srcData, err := os.ReadFile(req.Src)
+	if err != nil {
+		return nil, fmt.Errorf("read src: %w", err)
+	}
+
 	newSrc, err := removeLines(srcData, match.Line, match.EndLine)
 	if err != nil {
-		return nil, fmt.Errorf("remove from src: %v", err)
+		return nil, fmt.Errorf("remove from src: %w", err)
 	}
 
-	// Read dst.
-	dstData, err := os.ReadFile(a.Dst)
+	dstData, err := readDst(req.Dst)
 	if err != nil {
-		// If creating, start empty.
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("read dst: %v", err)
-		}
-		dstData = nil
+		return nil, err
 	}
 
-	// Determine insert position in dst.
 	body := strings.TrimRight(match.Body, "\n") + "\n"
-	dstLines := toLines(dstData)
-	insertLine := a.Line
 
-	if insertLine > 0 {
-		// Check the target line for existing code.
-		if insertLine <= len(dstLines) {
-			target := strings.TrimSpace(string(dstLines[insertLine-1]))
-			if target != "" {
-				return nil, fmt.Errorf("dst line %d has code: %q — refusing to replace. Pick a different line.", insertLine, target)
-			}
-		}
-	} else {
-		insertLine = len(dstLines) + 1
+	insertLine, err := resolveInsertLine(toLines(dstData), req.Line)
+	if err != nil {
+		return nil, err
 	}
 
 	newDst, err := insertAt(dstData, body, insertLine)
 	if err != nil {
-		return nil, fmt.Errorf("insert into dst: %v", err)
+		return nil, fmt.Errorf("insert into dst: %w", err)
 	}
 
+	return buildResult(req, match, newSrc, newDst, insertLine)
+}
+
+func parseArgs(raw json.RawMessage) (args, error) {
+	var req args
+
+	err := json.Unmarshal(raw, &req)
+	if err != nil {
+		return args{}, fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	if req.Name == "" {
+		return args{}, errNameRequired
+	}
+
+	req.Src = server.ResolvePath(req.Src)
+	req.Dst = server.ResolvePath(req.Dst)
+
+	return req, nil
+}
+
+func checkPaths(src, dst string) error {
+	err := server.CheckBounds(src)
+	if err != nil {
+		return fmt.Errorf("check bounds %s: %w", src, err)
+	}
+
+	err = server.CheckBounds(dst)
+	if err != nil {
+		return fmt.Errorf("check bounds %s: %w", dst, err)
+	}
+
+	err = server.CheckBanned(src)
+	if err != nil {
+		return fmt.Errorf("check banned %s: %w", src, err)
+	}
+
+	err = server.CheckBanned(dst)
+	if err != nil {
+		return fmt.Errorf("check banned %s: %w", dst, err)
+	}
+
+	return nil
+}
+
+func findSymbol(path, name string, pat *regexp.Regexp) (*grepfunc.FuncMatch, error) {
+	combined := func(line []byte) bool { return grepfunc.IsFuncSig(line) || grepfunc.IsStructSig(line) }
+
+	results, err := grepfunc.Search(path, "*", pat, maxSearchResults, combined)
+	if err != nil {
+		return nil, fmt.Errorf("search src: %w", err)
+	}
+
+	for i, r := range results {
+		if strings.EqualFold(r.Name, name) {
+			return &results[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: %q in %s", errSymbolNotFound, name, server.RelPath(path))
+}
+
+func readDst(path string) ([]byte, error) {
+	// #nosec G304 -- paths bounds-checked by server
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// If creating, start empty.
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("read dst: %w", err)
+	}
+
+	return data, nil
+}
+
+func resolveInsertLine(dstLines [][]byte, requested int) (int, error) {
+	if requested <= 0 {
+		return len(dstLines) + 1, nil
+	}
+
+	if requested > len(dstLines) {
+		return requested, nil
+	}
+
+	target := strings.TrimSpace(string(dstLines[requested-1]))
+	if target != "" {
+		return 0, fmt.Errorf(
+			"%w %d: %q — refusing to replace. Pick a different line", errDstLineHasCode, requested, target)
+	}
+
+	return requested, nil
+}
+
+func buildResult(req args, match *grepfunc.FuncMatch, newSrc, newDst []byte, insertLine int) (
+	*server.ToolCallResult, error,
+) {
 	var buf strings.Builder
-	srcRel := server.RelPath(a.Src)
-	dstRel := server.RelPath(a.Dst)
-	fmt.Fprintf(&buf, "move_symbol %q:\n", a.Name)
+
+	srcRel := server.RelPath(req.Src)
+	dstRel := server.RelPath(req.Dst)
+	fmt.Fprintf(&buf, "move_symbol %q:\n", req.Name)
 	fmt.Fprintf(&buf, "  src: %s (remove L%d–L%d, %d lines)\n", srcRel, match.Line, match.EndLine, match.Lines)
 	fmt.Fprintf(&buf, "  dst: %s (insert at L%d)\n", dstRel, insertLine)
 	fmt.Fprintf(&buf, "  kind: %s\n", symbolKind(match.Body))
 
-	if a.DryRun {
+	if req.DryRun {
 		buf.WriteString("\n[Dry run — no files changed]\n")
 		buf.WriteString("\n--- src after removal ---\n")
-		buf.WriteString(string(newSrc))
+		buf.Write(newSrc)
 		buf.WriteString("\n--- dst after insert ---\n")
-		buf.WriteString(string(newDst))
+		buf.Write(newDst)
 	} else {
-		if err := os.WriteFile(a.Src, newSrc, 0644); err != nil {
-			return nil, fmt.Errorf("write src: %v", err)
+		err := writeFilePreserveMode(req.Src, newSrc)
+		if err != nil {
+			return nil, fmt.Errorf("write src: %w", err)
 		}
-		if err := os.WriteFile(a.Dst, newDst, 0644); err != nil {
-			return nil, fmt.Errorf("write dst: %v", err)
+
+		err = writeFilePreserveMode(req.Dst, newDst)
+		if err != nil {
+			return nil, fmt.Errorf("write dst: %w", err)
 		}
+
 		buf.WriteString("\n[Done]\n")
 	}
 
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
+		IsError: false,
 	}, nil
+}
+
+func writeFilePreserveMode(path string, data []byte) error {
+	mode := fs.FileMode(newFileMode)
+
+	info, statErr := os.Stat(path)
+	if statErr == nil {
+		mode = info.Mode()
+	}
+
+	err := os.WriteFile(path, data, mode)
+	if err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	return nil
 }
 
 func symbolKind(body string) string {
@@ -153,51 +271,61 @@ func symbolKind(body string) string {
 	if before, _, ok := strings.Cut(body, "\n"); ok {
 		first = []byte(before)
 	}
+
 	if grepfunc.IsStructSig(first) {
 		return "type"
 	}
+
 	return "func"
 }
 
 func removeLines(data []byte, start, end int) ([]byte, error) {
 	lines := toLines(data)
 	if start < 1 || end > len(lines) || start > end {
-		return nil, fmt.Errorf("invalid range L%d–L%d (file has %d lines)", start, end, len(lines))
+		return nil, fmt.Errorf("%w: L%d–L%d (file has %d lines)", errInvalidRange, start, end, len(lines))
 	}
+
 	var buf strings.Builder
-	// Lines before start (0-indexed)
-	for i := 0; i < start-1; i++ {
+	for i := range start - 1 {
 		buf.Write(lines[i])
 		buf.WriteByte('\n')
 	}
-	// Lines after end
+
 	for i := end; i < len(lines); i++ {
 		buf.Write(lines[i])
 		buf.WriteByte('\n')
 	}
+
 	return []byte(buf.String()), nil
 }
 
 func insertAt(data []byte, text string, line int) ([]byte, error) {
 	lines := toLines(data)
+
 	if line < 1 {
-		return nil, fmt.Errorf("insert line must be >= 1")
+		return nil, errInsertLine
 	}
+
 	var buf strings.Builder
-	for i := 0; i < min(line-1, len(lines)); i++ {
+
+	for i := range min(line-1, len(lines)) {
 		buf.Write(lines[i])
 		buf.WriteByte('\n')
 	}
+
 	if line <= len(lines)+1 {
 		buf.WriteString(text)
+
 		if !strings.HasSuffix(text, "\n") {
 			buf.WriteByte('\n')
 		}
 	}
+
 	for i := line - 1; i < len(lines); i++ {
 		buf.Write(lines[i])
 		buf.WriteByte('\n')
 	}
+
 	return []byte(buf.String()), nil
 }
 
@@ -205,11 +333,14 @@ func toLines(data []byte) [][]byte {
 	if len(data) == 0 {
 		return nil
 	}
+
 	raw := strings.ReplaceAll(string(data), "\r\n", "\n")
 	parts := strings.Split(raw, "\n")
+
 	result := make([][]byte, len(parts))
 	for i, p := range parts {
 		result[i] = []byte(p)
 	}
+
 	return result
 }
