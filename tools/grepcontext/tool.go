@@ -39,10 +39,9 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name: "grep_context",
-	Description: "Use when you need matching lines WITH surrounding context for non-function patterns " +
-		"(constants, imports, config values, variable inits). Returns N lines before/after each match, " +
-		"deduplicated — replaces grep -C plus follow-up reads. For bare matches without context, native " +
-		"grep is sufficient.",
+	Description: "Matching lines WITH surrounding context for non-function patterns (constants, imports, " +
+		"config values). Returns N lines before/after each match, deduplicated — replaces grep -C plus " +
+		"follow-up reads.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -84,7 +83,7 @@ var Tool = server.Tool{
 			"compact": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false.",
+				Description: "Terse output: less whitespace, shorter headers. Default false.",
 			},
 			"scope": {
 				Type:        schemaBoolean,
@@ -92,10 +91,9 @@ var Tool = server.Tool{
 				Description: "Annotate each match with enclosing function/type name. Default false.",
 			},
 			"group_by_file": {
-				Type:  schemaBoolean,
-				Items: nil,
-				Description: "Group results under file headers instead of one header per match. Reduces " +
-					"noise for multi-file searches. Default false.",
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Group results under file headers instead of one header per match.",
 			},
 			"names_only": {
 				Type:        schemaBoolean,
@@ -105,7 +103,7 @@ var Tool = server.Tool{
 			"token_budget": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Max output chars. If exceeded, auto-switches to file:line only. No default (unlimited).",
+				Description: "Max output chars. If exceeded, falls back to file:line only, then truncates at line boundaries.",
 			},
 			"count_only": {
 				Type:        schemaBoolean,
@@ -593,9 +591,7 @@ func terseOutput(arg args, page []window, total, start, end int, suffix string) 
 	}
 
 	output := terse.String()
-	if len(output) > arg.TokenBudget {
-		output = output[:arg.TokenBudget]
-	}
+	output = server.TruncateToBudget(output, arg.TokenBudget)
 
 	output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
 		"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)

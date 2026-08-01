@@ -42,11 +42,9 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name: "grep_func",
-	Description: "Use when you need a function/method's full definition to read or edit its code. " +
-		"Returns complete brace-aware bodies with line numbers — native grep only returns matching lines, " +
-		"forcing a follow-up read. body=true returns full bodies; default returns signature + location. " +
-		"Set symbol=<name> to search for a pattern inside one specific symbol's body. " +
-		"For plain-text search (constants, config, prose) use grep instead.",
+	Description: "Function/method search with brace-aware bodies. body=true returns full bodies; " +
+		"default returns signature + location. Set symbol=<name> to search inside one symbol. " +
+		"For plain-text search use grep instead.",
 	InputSchema: server.InputSchema{
 		Type:                 "object",
 		AdditionalProperties: false,
@@ -54,9 +52,8 @@ var Tool = server.Tool{
 			schemaPattern: {
 				Type:  schemaString,
 				Items: nil,
-				Description: "Regex pattern to match against function names or code. Matches anywhere inside a " +
-					"function's lines — not just the signature. Examples: 'func.*Handler', 'def process', " +
-					"'return', 'TODO'.",
+				Description: "Regex against function names or code. Matches anywhere inside a function's lines, " +
+					"not just the signature.",
 			},
 			schemaPath: {
 				Type:        schemaString,
@@ -64,16 +61,14 @@ var Tool = server.Tool{
 				Description: "Directory to search. Optional — defaults to the opened project root.",
 			},
 			schemaInclude: {
-				Type:  schemaString,
-				Items: nil,
-				Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', " +
-					"'**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions.",
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Glob to filter files. Supports ** recursion. If omitted, auto-filtered to common source extensions.",
 			},
 			"max_results": {
-				Type:  schemaInteger,
-				Items: nil,
-				Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases " +
-					"to reduce token usage.",
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Max functions to return. Default 15, max 50.",
 			},
 			"offset": {
 				Type:        schemaInteger,
@@ -91,10 +86,9 @@ var Tool = server.Tool{
 				Description: "Case-sensitive regex. Default: false (case-insensitive).",
 			},
 			"summary": {
-				Type:  schemaBoolean,
-				Items: nil,
-				Description: "If true and body=true, truncate large functions: shows first+last N lines with " +
-					"omission count. Reduces token cost for large handlers.",
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "If body=true, show first+last N lines with omission count. Reduces token cost for large handlers.",
 			},
 			"summary_lines": {
 				Type:        schemaInteger,
@@ -102,22 +96,19 @@ var Tool = server.Tool{
 				Description: "Lines to show at start and end when summary=true. Default 5.",
 			},
 			"names_only": {
-				Type:  schemaBoolean,
-				Items: nil,
-				Description: "If true, return only file:line:name — no body, no signature. Cheapest mode (~20x " +
-					"fewer tokens than body=true). For table-of-contents scans.",
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Return only file:line:name — cheapest mode (~20x fewer tokens). For table-of-contents scans.",
 			},
 			"include_types": {
-				Type:  schemaBoolean,
-				Items: nil,
-				Description: "If true, also return type definitions (struct/class/interface/enum) in the results. " +
-					"Combines grep_func + grep_struct in one call.",
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Also return type definitions. Combines grep_func + grep_struct in one call.",
 			},
 			"sig_lines": {
-				Type:  schemaInteger,
-				Items: nil,
-				Description: "Lines of signature when body=false. Default 1 (first line only). Use 2-3 for " +
-					"multi-line signatures.",
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Signature lines when body=false. Default 1; use 2-3 for multi-line signatures.",
 			},
 			"compact": {
 				Type:        schemaBoolean,
@@ -125,22 +116,19 @@ var Tool = server.Tool{
 				Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false.",
 			},
 			"receiver": {
-				Type:  schemaString,
-				Items: nil,
-				Description: "Filter to methods on this receiver type (e.g. 'Server' finds func (s *Server) Method). " +
-					"Applies to Go, Rust, Python classes.",
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Filter to methods on this receiver type (e.g. 'Server' → func (s *Server) Method).",
 			},
 			"group_by_file": {
-				Type:  schemaBoolean,
-				Items: nil,
-				Description: "Group results under file headers instead of a flat list. Reduces navigation overhead " +
-					"in large multi-file scans.",
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Group results under file headers instead of a flat list.",
 			},
 			"token_budget": {
-				Type:  schemaInteger,
-				Items: nil,
-				Description: "Max output chars. If exceeded, auto-switches to names_only/summary mode. No default " +
-					"(unlimited).",
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Max output chars. If exceeded, falls back to names_only, then truncates at line boundaries.",
 			},
 			"exclude_pattern": {
 				Type:        schemaString,
@@ -150,9 +138,8 @@ var Tool = server.Tool{
 			"symbol": {
 				Type:  schemaString,
 				Items: nil,
-				Description: "If set, search INSIDE the named symbol's body instead of listing functions. Finds the " +
-					"symbol (function or type) by name, then returns matching lines with context — ~5x " +
-					"cheaper than body=true for targeted searches.",
+				Description: "Search INSIDE the named symbol's body instead of listing functions. ~5x cheaper than " +
+					"body=true for targeted searches.",
 			},
 			"context_lines": {
 				Type:        schemaInteger,
@@ -310,9 +297,7 @@ func renderPaged(arg args, all []FuncMatch) string {
 	output := renderResults(arg, page, total, start, end, arg.NamesOnly)
 	if arg.TokenBudget > 0 && len(output) > arg.TokenBudget && !arg.NamesOnly {
 		output = renderResults(arg, page, total, start, end, true)
-		if len(output) > arg.TokenBudget {
-			output = output[:arg.TokenBudget]
-		}
+		output = server.TruncateToBudget(output, arg.TokenBudget)
 
 		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
 			"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)
@@ -744,12 +729,10 @@ func renderScopedTerse(arg args, symbols []FuncMatch, patRe *regexp.Regexp) stri
 	}
 
 	output := terse.String()
-	if len(output) > arg.TokenBudget {
-		output = output[:arg.TokenBudget]
-	}
+	output = server.TruncateToBudget(output, arg.TokenBudget)
 
 	output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
-		"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)
+		"Reduce context_lines or scope for more.]\n", arg.TokenBudget)
 
 	return output
 }

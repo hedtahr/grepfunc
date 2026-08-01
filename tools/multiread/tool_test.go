@@ -64,6 +64,27 @@ func TestHandleSingleNormalFile(t *testing.T) {
 	}
 }
 
+func TestTokenEstimateLine(t *testing.T) {
+	var buf strings.Builder
+
+	// Non-compact head output must carry a chars/4 estimate line.
+	content := "hello world"
+	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, false)
+
+	got := buf.String()
+	if !strings.Contains(got, "≈2 tokens (chars/4)") {
+		t.Errorf("missing estimate line in output: %q", got)
+	}
+
+	// Compact output stays bare.
+	buf.Reset()
+	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, true)
+
+	if got := buf.String(); got != "```txt\n"+content+"\n```\n" {
+		t.Errorf("compact output should be unchanged, got %q", got)
+	}
+}
+
 // renderTail must handle 1-byte files, files without trailing newlines,
 // empty files, and files ending in newlines.
 func TestRenderTailEdges(t *testing.T) {

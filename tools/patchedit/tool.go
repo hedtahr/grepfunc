@@ -24,10 +24,8 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name: "patch_file",
-	Description: "Edit a file by replacing old_text with new_text using fuzzy matching, " +
-		"or inserting text at a specific line. Reads the file fresh before every edit " +
-		"(eliminates stale content errors). Runs formatter BEFORE the edit when applicable, " +
-		"so the diff shows only your intended changes.",
+	Description: "Edit a file by replacing old_text with new_text (fuzzy matching) or inserting text at a line. " +
+		"Runs formatter BEFORE the edit when applicable. Prefer edit mode for surgical changes.",
 	InputSchema: server.InputSchema{
 		Type:                 jsonTypeObject,
 		AdditionalProperties: false,
@@ -41,40 +39,30 @@ var Tool = server.Tool{
 			"inserts": {Type: jsonTypeArray,
 				Description: "Array of insert operations. Each inserts text before a specific line.",
 				Items: &server.Property{Type: jsonTypeObject, Items: nil,
-					Description: "An insert with 'line' (1-based line number to insert before), " +
-						"'text' to insert, and optional index for ordering."}},
+					Description: "{line (1-based), text, index?}."}},
 			"dry_run": {Type: jsonTypeBoolean, Items: nil,
 				Description: "If true, preview changes without writing the file."},
 			"fail_fast": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true, apply all-or-nothing: if any edit fails to match, " +
-					"no edits are written to disk. Returns the full match report without modifying the file."},
+				Description: "All-or-nothing: if any edit fails to match, write nothing."},
 
 			"diff_context": {Type: jsonTypeInteger, Items: nil,
-				Description: "Lines of context around diff hunks. Default 3. " +
-					"Use 0 for minimal diff (changed lines only). Max 10."},
+				Description: "Diff hunk context lines. Default 3, max 10."},
 			"create_if_missing": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true and path does not exist, create an empty file before applying edits. " +
-					"Useful for new-file creation without switching to write mode."},
+				Description: "Create an empty file first if path does not exist."},
 			"skip_validate": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true, skip post-write validation (go vet / python ast). " +
-					"Reduces latency for multi-edit sequences."},
+				Description: "Skip post-write validation (go vet / python ast)."},
 			"append_text": {Type: jsonTypeString, Items: nil,
-				Description: "Text to append to the end of the file. Applied after all edits/inserts. " +
-					"A newline separator is added automatically if the file doesn't end with one."},
+				Description: "Text to append at end of file (auto-newline if missing)."},
 			"no_diff": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true, omit the diff block from the response. " +
-					"Shows only the edit summary line. Reduces token usage for confirmation-only workflows."},
+				Description: "Omit the diff block; show only the summary line."},
 			"echo_lines": {Type: jsonTypeInteger, Items: nil,
-				Description: "Lines of context around first edit point in result echo. Default 3. Set 0 to disable " +
-					"(saves ~50 tokens). Eliminates a follow-up file_head call to verify the result."},
+				Description: "Context lines around first edit point in result echo. Default 3; 0 disables."},
 			"terse": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true, return minimal output. " +
-					"Just '[OK] N/N edits applied' or '[FAIL] errors'. No diff, no per-edit table, no echo_lines."},
+				Description: "Minimal output: '[OK] N/N edits applied' or '[FAIL] errors'."},
 			"insert_file": {Type: jsonTypeString, Items: nil,
-				Description: "Path to a file whose contents should be inserted. Reads the file and treats it " +
-					"as an insert operation at the specified line."},
+				Description: "File whose contents are inserted at insert_line."},
 			"insert_line": {Type: jsonTypeInteger, Items: nil,
-				Description: "Line number to insert the file contents before. Default 1."},
+				Description: "Line number to insert insert_file contents before. Default 1."},
 		},
 		Required: []string{propPath},
 	},

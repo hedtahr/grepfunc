@@ -91,30 +91,6 @@ func logInitf(format string, args ...any) {
 	_ = logFile.Close()
 }
 
-// SessionCache is a cross-tool cache for expensive lookups (e.g., symbol bodies).
-var (
-	SessionCache   = map[string]any{} //nolint:gochecknoglobals // deliberate cross-tool server state
-	SessionCacheMu sync.RWMutex       //nolint:gochecknoglobals // deliberate cross-tool server state
-)
-
-// CacheSet stores a value in the session cache.
-func CacheSet(key string, val any) {
-	SessionCacheMu.Lock()
-	SessionCache[key] = val
-	SessionCacheMu.Unlock()
-}
-
-// CacheGet retrieves a value from the session cache.
-func CacheGet(key string) (any, bool) {
-	SessionCacheMu.RLock()
-
-	v, ok := SessionCache[key]
-
-	SessionCacheMu.RUnlock()
-
-	return v, ok
-}
-
 // New creates a Server with the given name and version.
 func New(name, version string) *Server {
 	return &Server{
@@ -668,6 +644,22 @@ func ResolvePath(path string) string {
 	}
 
 	return filepath.Join(ProjectRoot, path)
+}
+
+// TruncateToBudget trims s to budget bytes, cutting only at line boundaries so
+// each kept line stays complete (head-preserving). Falls back to a hard slice
+// when no newline falls within budget.
+func TruncateToBudget(s string, budget int) string {
+	if budget <= 0 || len(s) <= budget {
+		return s
+	}
+
+	cut := strings.LastIndexByte(s[:budget], '\n')
+	if cut < 0 {
+		return s[:budget]
+	}
+
+	return s[:cut+1]
 }
 
 // reorientRoot re-pins ProjectRoot when an absolute path lies outside it.

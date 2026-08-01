@@ -38,34 +38,30 @@ var errNameRequired = errors.New("name is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name: "find_symbol",
-	Description: "Use when you know a symbol's NAME and need its location, signature, or full definition. " +
-		"Returns file:line + signature — set body=true for the complete body in one call (absorbs read_symbol). " +
-		"Word-boundary match first, substring fallback, then typo suggestions.",
+	Description: "Find a symbol by NAME: returns file:line + signature. Set body=true for the complete body " +
+		"in one call. Word-boundary match first, substring fallback, then typo suggestions.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name": {Type: typeString, Description: "Symbol name to find. Matches function/method/type names. " +
-				"Examples: 'Handle', 'UserService', 'findRelated'. Case-insensitive by default.", Items: nil},
-			"path": {Type: typeString, Description: "Directory to search. Optional — defaults to the opened project root. " +
-				"Supports ** for recursive matching.", Items: nil},
+			"name": {Type: typeString, Description: "Symbol name to find (function/method/type). " +
+				"Case-insensitive by default.", Items: nil},
+			"path": {Type: typeString, Description: "Directory to search. " +
+				"Optional — defaults to the opened project root. Supports **.", Items: nil},
 			"include": {Type: typeString, Description: "Glob to filter files. " +
 				"If omitted, auto-filtered to common source extensions.", Items: nil},
-			"kind": {Type: typeString, Description: "Filter by kind: 'func' (functions/methods only), " +
-				"'type' (structs/classes/interfaces/enums only), or 'any' (default).", Items: nil},
+			"kind":           {Type: typeString, Description: "Filter by kind: 'func', 'type', or 'any' (default).", Items: nil},
 			"max_results":    {Type: typeInteger, Description: "Max results. Default 10, max 30.", Items: nil},
 			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive matching. Default: false.", Items: nil},
-			"compact": {Type: typeBoolean, Description: "Terse output: less whitespace, " +
-				"shorter headers. Default false.", Items: nil},
-			"names_only": {Type: typeBoolean, Description: "If true, return only file:line:name — " +
-				"no code blocks. Cheapest mode.", Items: nil},
-			"body": {Type: typeBoolean, Description: "If true, return the full body of each matched symbol — " +
-				"no second look-up call needed. Default false (signature only).", Items: nil},
-			"token_budget": {Type: typeInteger, Description: "Max output chars. If exceeded, auto-switches to names_only. " +
-				"No default (unlimited).", Items: nil},
-			"summary": {Type: typeBoolean, Description: "If true and body=true, truncate large bodies: " +
-				"shows first+last N lines with omission count.", Items: nil},
-			"summary_lines": {Type: typeInteger, Description: "Lines to show at start and end " +
-				"when summary=true. Default 5.", Items: nil},
+			"compact": {Type: typeBoolean, Description: "Terse output: less whitespace, shorter headers. " +
+				"Default false.", Items: nil},
+			"names_only": {Type: typeBoolean, Description: "Return only file:line:name — cheapest mode.", Items: nil},
+			"body": {Type: typeBoolean, Description: "Return the full body of each matched symbol — " +
+				"no second look-up call needed. Default false.", Items: nil},
+			"token_budget": {Type: typeInteger, Description: "Max output chars. If exceeded, falls back to names_only, " +
+				"then truncates at line boundaries.", Items: nil},
+			"summary": {Type: typeBoolean, Description: "If body=true, truncate large bodies: first+last N lines " +
+				"with omission count.", Items: nil},
+			"summary_lines": {Type: typeInteger, Description: "Lines at start and end when summary=true. Default 5.", Items: nil},
 		},
 		Required:             []string{"name"},
 		AdditionalProperties: false,
@@ -110,11 +106,6 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 	}
 
-	// Cache results for read_symbol.
-	for _, match := range results {
-		server.CacheSet("symbol:"+match.File+":"+match.Name, match)
-	}
-
 	// Limit.
 	if len(results) > arg.MaxResults {
 		results = results[:arg.MaxResults]
@@ -157,9 +148,7 @@ func suggestionResult(arg args, suggestions []grepfunc.FuncMatch) *server.ToolCa
 
 func trimOutput(arg args, results []grepfunc.FuncMatch) string {
 	output := buildOutput(arg, results, true)
-	if len(output) > arg.TokenBudget {
-		output = output[:arg.TokenBudget]
-	}
+	output = server.TruncateToBudget(output, arg.TokenBudget)
 
 	return output + fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
 		"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)

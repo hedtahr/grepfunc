@@ -5,7 +5,6 @@ import (
 	"flag"
 
 	"github.com/hedtahr/grepfunc/server"
-	"github.com/hedtahr/grepfunc/tools/counttokens"
 	"github.com/hedtahr/grepfunc/tools/deletesymbol"
 
 	"github.com/hedtahr/grepfunc/tools/filestats"
@@ -28,6 +27,7 @@ import (
 	"github.com/hedtahr/grepfunc/tools/renamesymbol"
 	"github.com/hedtahr/grepfunc/tools/symbolat"
 	"github.com/hedtahr/grepfunc/tools/toolstats"
+	"github.com/hedtahr/grepfunc/tools/writefile"
 )
 
 func main() {
@@ -55,7 +55,6 @@ func main() {
 	srv.Register(patchedit.BatchTool, patchedit.BatchHandle)
 
 	srv.Register(gitcontext.GitTool, gitcontext.GitHandle)
-	srv.Register(counttokens.Tool, counttokens.Handle)
 	srv.Register(grepdead.Tool, grepdead.Handle)
 	srv.Register(deletesymbol.Tool, deletesymbol.Handle)
 	srv.Register(renamesymbol.Tool, renamesymbol.Handle)
@@ -64,5 +63,6 @@ func main() {
 	srv.Register(movesymbol.Tool, movesymbol.Handle)
 	srv.Register(grepreplace.Tool, grepreplace.Handle)
 	srv.Register(toolstats.Tool, toolstats.Handle)
+	srv.Register(writefile.Tool, writefile.Handle)
 	srv.Run()
 }

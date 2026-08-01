@@ -78,6 +78,7 @@ const (
 
 	maxEntries    = 10
 	maxTotalFiles = 20
+	charsPerToken = 4
 
 	tailSkipLastByte = 2
 )
@@ -510,6 +511,15 @@ func writeEntryOutput(
 	}
 
 	buf.WriteString("```\n")
+
+	if !compact {
+		buf.WriteString(estTokens(strings.Join(lines, "\n")))
+	}
+}
+
+// estTokens returns a chars/4 token estimate line for rendered content.
+func estTokens(content string) string {
+	return fmt.Sprintf("≈%d tokens (chars/4)\n", len(content)/charsPerToken)
 }
 
 func renderRange(path string, start, end, lines int, compact bool, buf *strings.Builder) error {
@@ -614,6 +624,7 @@ func writeRangeOutput(buf *strings.Builder, ext, content, rel string, start, end
 		fmt.Fprintf(buf, "```%s\n%s\n```\n", ext, content)
 	} else {
 		fmt.Fprintf(buf, "Lines %d-%d of %d — %s:\n\n```%s\n%s\n```\n", start, end, total, rel, ext, content)
+		buf.WriteString(estTokens(content))
 	}
 }
 
@@ -624,8 +635,10 @@ func writeHeadOutput(buf *strings.Builder, ext, content, rel string, lines, tota
 		fmt.Fprintf(buf, "```%s\n%s\n```\n", ext, content)
 	case lines < total:
 		fmt.Fprintf(buf, "First %d of %d lines — %s:\n\n```%s\n%s\n```\n", lines, total, rel, ext, content)
+		buf.WriteString(estTokens(content))
 	default:
 		fmt.Fprintf(buf, "All %d lines — %s:\n\n```%s\n%s\n```\n", total, rel, ext, content)
+		buf.WriteString(estTokens(content))
 	}
 }
 
@@ -667,6 +680,7 @@ func renderTail(path string, count int, compact bool, buf *strings.Builder) erro
 	} else {
 		fmt.Fprintf(buf, "Last %d of %d lines (L%d-%d) — %s:\n\n```%s\n%s\n```\n",
 			show, total, startLine, total, rel, ext, selected)
+		buf.WriteString(estTokens(selected))
 	}
 
 	return nil

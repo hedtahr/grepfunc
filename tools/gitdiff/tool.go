@@ -73,7 +73,8 @@ type args struct {
 	Base         string `json:"base"`
 }
 
-func findGitRoot(start string) (string, bool) {
+// FindGitRoot walks up from start looking for a .git directory.
+func FindGitRoot(start string) (string, bool) {
 	dir := start
 
 	for {
@@ -112,7 +113,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, err
 	}
 
-	gitRoot, ok := findGitRoot(server.ProjectRoot)
+	gitRoot, ok := FindGitRoot(server.ProjectRoot)
 	if !ok {
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{

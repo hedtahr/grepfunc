@@ -4,6 +4,7 @@ package gitcontext
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -25,8 +26,8 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name: "git_context",
-	Description: "Compact git orientation: current branch, recent commits, working-tree status, and optionally " +
-		"diff --stat. One call instead of 3 terminal commands. Use at session start to understand where the project is.",
+	Description: "Compact git orientation: branch, recent commits, working-tree status, and optionally " +
+		"diff --stat. Use at session start to understand where the project is.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -154,15 +155,14 @@ func renderContext(req args, branch, log, status, diffStat string) string {
 //nolint:gochecknoglobals // MCP tool definition
 var GitTool = server.Tool{
 	Name: "git",
-	Description: "Git operations in one tool. mode=context (default) returns branch, recent commits, " +
-		"working-tree status, and diff --stat; mode=diff returns line-level changes for a file or the whole tree. " +
-		"One call instead of 3 terminal commands.",
+	Description: "Git operations in one tool. mode=context (default): branch, recent commits, status, diff --stat. " +
+		"mode=diff: line-level changes for a file or the whole tree. mode=restore: undo local edits to a file.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"mode": {
 				Type:        typeString,
-				Description: "'context' (default) or 'diff'.",
+				Description: "'context' (default), 'diff', or 'restore'.",
 				Items:       nil,
 			},
 			"path": {
@@ -203,7 +203,12 @@ var GitTool = server.Tool{
 			},
 			"base": {
 				Type:        typeString,
-				Description: "Diff mode: base commit or branch to diff against, e.g. 'HEAD~1', 'main'. Default: working tree diff.",
+				Description: "Diff mode: base commit or branch to diff against (e.g. 'HEAD~1', 'main'). Default: working tree.",
+				Items:       nil,
+			},
+			"file": {
+				Type:        typeString,
+				Description: "Restore mode: file to restore (git restore). Absolute path or project-relative.",
 				Items:       nil,
 			},
 		},
@@ -212,7 +217,9 @@ var GitTool = server.Tool{
 	},
 }
 
-// GitHandle routes to the diff or context handler.
+var errFileRequired = errors.New("file is required for restore mode")
+
+// GitHandle routes to the diff, restore, or context handler.
 func GitHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	var req struct {
 		Mode string `json:"mode"`
@@ -232,5 +239,70 @@ func GitHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return res, nil
 	}
 
+	if req.Mode == "restore" {
+		res, err := handleRestore(raw)
+		if err != nil {
+			return nil, fmt.Errorf("git restore: %w", err)
+		}
+
+		return res, nil
+	}
+
 	return Handle(raw)
+}
+
+// handleRestore discards local changes to a file, reverting it to HEAD.
+func handleRestore(raw json.RawMessage) (*server.ToolCallResult, error) {
+	var req struct {
+		File string `json:"file"`
+		Path string `json:"path"`
+	}
+
+	err := json.Unmarshal(raw, &req)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	target := req.File
+	if target == "" {
+		target = req.Path
+	}
+
+	if target == "" {
+		return nil, errFileRequired
+	}
+
+	resolved := server.ResolvePath(target)
+
+	err = server.CheckBounds(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("check bounds: %w", err)
+	}
+
+	err = server.CheckBanned(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("check banned: %w", err)
+	}
+
+	gitRoot, ok := gitdiff.FindGitRoot(server.ProjectRoot)
+	if !ok {
+		return nil, errors.New("no git repository found (checked " + server.ProjectRoot + " and parents)")
+	}
+
+	// #nosec G204 -- fixed git binary; path bounds-checked by server
+	cmd := exec.CommandContext(context.Background(), "git", "restore", "--source=HEAD", "--", resolved)
+	cmd.Dir = gitRoot
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git restore %q: %w: %s", resolved, err, strings.TrimSpace(string(out)))
+	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{
+			Type: "text",
+			Text: fmt.Sprintf("Restored %s from HEAD.\n", server.RelPath(resolved)),
+		}},
+		IsError: false,
+	}, nil
 }
