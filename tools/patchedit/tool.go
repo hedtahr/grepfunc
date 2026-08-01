@@ -12,7 +12,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":      {Type: "string", Description: "MUST be absolute path to the file to edit (e.g. '/Users/you/project/src/main.go')."},
+			"path":      {Type: "string", Description: "File to edit. Absolute path or project-relative."},
 			"edits":     {Type: "array", Description: "Array of edit operations (find-and-replace). Each item: {old_text, new_text, index?, replace_all?}.", Items: &server.Property{Type: "object", Description: "An edit with old_text, new_text, optional index, and optional replace_all (replaces all occurrences instead of erroring on AMBIGUOUS_MATCH)."}},
 			"inserts":   {Type: "array", Description: "Array of insert operations. Each inserts text before a specific line.", Items: &server.Property{Type: "object", Description: "An insert with 'line' (1-based line number to insert before), 'text' to insert, and optional index for ordering."}},
 			"dry_run":   {Type: "boolean", Description: "If true, preview changes without writing the file."},

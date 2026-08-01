@@ -22,7 +22,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":           {Type: "string", Description: "MUST be absolute path to file or directory to inspect. Defaults to last file operated on in this session."},
+			"path":           {Type: "string", Description: "File or directory to inspect. Defaults to the last file operated on, then the opened project root."},
 			"filter":         {Type: "string", Description: "Which symbols to return: 'func' (functions/methods only), 'type' (structs/interfaces/enums only), or 'all' (default)."},
 			"count_only":     {Type: "boolean", Description: "If true, return only the count of symbols — no names, no lines. Cheapest check: 'is this file worth inspecting?'"},
 			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},

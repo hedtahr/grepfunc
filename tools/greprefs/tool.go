@@ -15,12 +15,12 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_refs",
-	Description: "Find all references to a named symbol — type usages, assignments, function arguments, and call sites. Unlike find_callers (call-syntax only), grep_refs finds every non-declaration usage: passing a func as a value, using a type in an annotation, referencing a constant. Filters declarations, imports, and comments automatically.",
+	Description: "Use when you need every reference to a symbol: call sites, type usages, assignments, and arguments. Filters declarations, imports, and comments automatically — native grep floods results with the declaration itself and doc-comment mentions. Set calls_only=true for invocation lines only (absorbs find_callers); add receiver=<name> to narrow to one object's method calls.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name":           {Type: "string", Description: "Symbol name to find references to. Matched as a whole word (word-boundary)."},
-			"path":           {Type: "string", Description: "MUST be absolute path to file or directory to search."},
+			"path":           {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
 			"include":        {Type: "string", Description: "Glob filter. Defaults to all source files."},
 			"context_lines":  {Type: "integer", Description: "Lines before/after each reference. Default 2, max 8."},
 			"case_sensitive": {Type: "boolean", Description: "Default false."},
@@ -29,6 +29,8 @@ var Tool = server.Tool{
 			"compact":        {Type: "boolean", Description: "Terse output. Default false."},
 			"names_only":     {Type: "boolean", Description: "Return only file:line — no context. Cheapest mode."},
 			"scope":          {Type: "boolean", Description: "Annotate each reference with the enclosing function/method name."},
+			"calls_only":     {Type: "boolean", Description: "If true, return only invocation lines (call syntax: Name( or x.Name(), excluding type usages, assignments, and declarations). Absorbs the old find_callers."},
+			"receiver":       {Type: "string", Description: "With calls_only=true, only match calls on this receiver/variable name. E.g. 's' finds 's.MethodName('."},
 		},
 		Required: []string{"name"},
 	},
@@ -53,6 +55,8 @@ type args struct {
 	Compact       bool   `json:"compact"`
 	NamesOnly     bool   `json:"names_only"`
 	Scope         bool   `json:"scope"`
+	CallsOnly     bool   `json:"calls_only"`
+	Receiver      string `json:"receiver"`
 }
 
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
@@ -80,7 +84,17 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if a.CaseSensitive {
 		flags = ""
 	}
-	refRe, err := regexp.Compile(flags + `\b` + regexp.QuoteMeta(a.Name) + `\b`)
+	var refRe *regexp.Regexp
+	var err error
+	if a.CallsOnly {
+		if a.Receiver != "" {
+			refRe, err = regexp.Compile(flags + regexp.QuoteMeta(a.Receiver) + `\s*\.\s*` + regexp.QuoteMeta(a.Name) + `\s*[.(]`)
+		} else {
+			refRe, err = regexp.Compile(flags + `\b` + regexp.QuoteMeta(a.Name) + `\s*[.(]`)
+		}
+	} else {
+		refRe, err = regexp.Compile(flags + `\b` + regexp.QuoteMeta(a.Name) + `\b`)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("invalid name: %v", err)
 	}
@@ -201,7 +215,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	var buf strings.Builder
 
 	if len(sites) == 0 {
-		fmt.Fprintf(&buf, "No references found for %q.\n", a.Name)
+		if a.CallsOnly {
+			fmt.Fprintf(&buf, "No call sites found for %q.\n", a.Name)
+		} else {
+			fmt.Fprintf(&buf, "No references found for %q.\n", a.Name)
+		}
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 		}, nil

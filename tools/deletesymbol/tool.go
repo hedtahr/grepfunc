@@ -18,7 +18,7 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name":    {Type: "string", Description: "Name of the symbol to delete. Exact match (case-insensitive)."},
-			"path":    {Type: "string", Description: "MUST be absolute path to the file containing the symbol."},
+			"path":    {Type: "string", Description: "File containing the symbol. Absolute path or project-relative (resolved against the opened project root)."},
 			"dry_run": {Type: "boolean", Description: "Preview the file after deletion without writing."},
 		},
 		Required: []string{"name", "path"},

@@ -16,12 +16,12 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_context",
-	Description: "Search file contents and return matching lines WITH surrounding context. Eliminates the grep→file_head two-step for non-function patterns (constants, imports, config values, variable inits). Returns N lines before/after each match, deduplicates overlapping windows.",
+	Description: "Use when you need matching lines WITH surrounding context for non-function patterns (constants, imports, config values, variable inits). Returns N lines before/after each match, deduplicated — replaces grep -C plus follow-up reads. For bare matches without context, native grep is sufficient.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"pattern":        {Type: "string", Description: "Regex to search for"},
-			"path":           {Type: "string", Description: "MUST be absolute path to file or directory"},
+			"path":           {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
 			"include":        {Type: "string", Description: "Glob filter. E.g. **/*.go. Defaults to all source files."},
 			"context_lines":  {Type: "integer", Description: "Lines before/after each match. Default 3, max 10."},
 			"case_sensitive": {Type: "boolean", Description: "Default false."},

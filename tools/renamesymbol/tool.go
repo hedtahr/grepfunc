@@ -22,7 +22,7 @@ var Tool = server.Tool{
 		Properties: map[string]server.Property{
 			"old_name":       {Type: "string", Description: "Symbol name to rename."},
 			"new_name":       {Type: "string", Description: "New name for the symbol."},
-			"path":           {Type: "string", Description: "MUST be absolute path to root directory to search."},
+			"path":           {Type: "string", Description: "Root directory to search. Optional — defaults to the opened project root."},
 			"include":        {Type: "string", Description: "Glob filter e.g. '**/*.go'. Defaults to all source files."},
 			"kind":           {Type: "string", Description: "Filter declaration kind: 'func', 'type', or 'any' (default). Only affects dry-run declaration count; replacements always use word-boundary."},
 			"dry_run":        {Type: "boolean", Description: "Preview changes without writing files."},

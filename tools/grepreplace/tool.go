@@ -15,7 +15,7 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_replace",
-	Description: "Regex find-and-replace across files matching a glob. Like sed -i 's/pattern/replacement/g'. Uses Go regex syntax — supports capture groups ($1, $2). Returns per-file change summary. Use dry_run=true to preview.",
+	Description: "Use for regex find-and-replace across many files in one call. Safer than sed -i for cross-file refactors: returns a per-file change summary and supports dry_run preview. Go regex syntax with capture groups ($1, $2). For single-file one-off edits, native sed is fine.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

@@ -15,14 +15,14 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_imports",
-	Description: "Find all files importing a given package/module, or list what a specific file imports. Handles Go, Python, JS/TS, and Rust import syntax. Returns structured file→symbols output. Replaces the grep_context('import.*module') pattern with one call.",
+	Description: "Use when you need import relationships: which files import a module, or what one specific file imports. Language-aware parsing (Go, Python, JS/TS, Rust) — native grep can't reliably match import syntax across languages. Returns structured file→symbols output in one call.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"module":     {Type: "string", Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any import path containing 'grepfunc'. Omit when using 'file' to list all imports."},
-			"path":       {Type: "string", Description: "MUST be absolute path to directory to search."},
+			"path":       {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
 			"include":    {Type: "string", Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted."},
-			"file":       {Type: "string", Description: "MUST be absolute path to file. If set, list ALL imports in this specific file (ignores module/path)."},
+			"file":       {Type: "string", Description: "Specific file to inspect. Absolute path or project-relative. If set, lists ALL imports in this file (ignores module/path)."},
 			"compact":    {Type: "boolean", Description: "Terse output. Default false."},
 			"body":       {Type: "boolean", Description: "If true, show matched import lines inline (code block per file). Saves a follow-up grep_context call."},
 			"names_only": {Type: "boolean", Description: "If true, return only file:import_path — no code blocks. Cheapest mode."},

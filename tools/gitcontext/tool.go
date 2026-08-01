@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hedtahr/grepfunc/server"
+	"github.com/hedtahr/grepfunc/tools/gitdiff"
 )
 
 var Tool = server.Tool{
@@ -15,7 +16,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":      {Type: "string", Description: "MUST be absolute path to project directory."},
+			"path":      {Type: "string", Description: "Project directory. Optional — defaults to the opened project root."},
 			"commits":   {Type: "integer", Description: "Number of recent commits to show. Default 5."},
 			"diff_stat": {Type: "boolean", Description: "Include git diff --stat (unstaged changes). Default true."},
 			"compact":   {Type: "boolean", Description: "Terse output. Default false."},
@@ -101,4 +102,37 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: buf.String()}},
 	}, nil
+}
+
+var GitTool = server.Tool{
+	Name:        "git",
+	Description: "Git operations in one tool. mode=context (default) returns branch, recent commits, working-tree status, and diff --stat; mode=diff returns line-level changes for a file or the whole tree. One call instead of 3 terminal commands.",
+	InputSchema: server.InputSchema{
+		Type: "object",
+		Properties: map[string]server.Property{
+			"mode":          {Type: "string", Description: "'context' (default) or 'diff'."},
+			"path":          {Type: "string", Description: "Context mode: project directory. Diff mode: specific file to diff (omit for all changed files). Optional — defaults to the opened project root."},
+			"commits":       {Type: "integer", Description: "Context mode: number of recent commits to show. Default 5."},
+			"diff_stat":     {Type: "boolean", Description: "Context mode: include git diff --stat. Default true."},
+			"compact":       {Type: "boolean", Description: "Context mode: terse output. Default false."},
+			"staged":        {Type: "boolean", Description: "Diff mode: show staged (--cached) changes. Default false."},
+			"context_lines": {Type: "integer", Description: "Diff mode: lines of context around changes. Default 3, max 10."},
+			"stat_only":     {Type: "boolean", Description: "Diff mode: show only --stat summary (no line diff)."},
+			"base":          {Type: "string", Description: "Diff mode: base commit or branch to diff against, e.g. 'HEAD~1', 'main'. Default: working tree diff."},
+		},
+		Required: []string{},
+	},
+}
+
+func GitHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
+	var a struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %v", err)
+	}
+	if a.Mode == "diff" {
+		return gitdiff.Handle(raw)
+	}
+	return Handle(raw)
 }

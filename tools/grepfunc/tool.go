@@ -12,12 +12,12 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_func",
-	Description: "Search for functions/methods matching a pattern and return complete function bodies with line numbers. Much more useful than grep when you need to understand or modify code — returns the full definition (signature + body), not just matching lines. Handles braces with string/comment awareness. Use BEFORE editing to understand code structure. Use to find function implementations, call sites, or patterns inside function bodies.",
+	Description: "Use when you need a function/method's full definition to read or edit its code. Returns complete brace-aware bodies with line numbers — native grep only returns matching lines, forcing a follow-up read. body=true returns full bodies; default returns signature + location. Set symbol=<name> to search for a pattern inside one specific symbol's body. For plain-text search (constants, config, prose) use grep instead.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"pattern":         {Type: "string", Description: "Regex pattern to match against function names or code. Matches anywhere inside a function's lines — not just the signature. Examples: 'func.*Handler', 'def process', 'return', 'TODO'."},
-			"path":            {Type: "string", Description: "MUST be absolute path to file or directory to search"},
+			"path":            {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
 			"include":         {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.py'. If omitted, auto-filtered to common source extensions."},
 			"max_results":     {Type: "integer", Description: "Max functions to return. Default 15, max 50. Use lower values for large codebases to reduce token usage."},
 			"offset":          {Type: "integer", Description: "Starting position for paginated results (0-based)."},
@@ -33,6 +33,8 @@ var Tool = server.Tool{
 			"group_by_file":   {Type: "boolean", Description: "Group results under file headers instead of a flat list. Reduces navigation overhead in large multi-file scans."},
 			"token_budget":    {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only/summary mode. No default (unlimited)."},
 			"exclude_pattern": {Type: "string", Description: "Regex to exclude matching results. Filters on body and name."},
+			"symbol":          {Type: "string", Description: "If set, search INSIDE the named symbol's body instead of listing functions. Finds the symbol (function or type) by name, then returns matching lines with context — ~5x cheaper than body=true for targeted searches."},
+			"context_lines":   {Type: "integer", Description: "Lines of context around each match when symbol is set. Default 2, max 8."},
 		},
 		Required: []string{"pattern"},
 	},
@@ -56,6 +58,8 @@ type args struct {
 	GroupByFile    bool   `json:"group_by_file"`
 	TokenBudget    int    `json:"token_budget"`
 	ExcludePattern string `json:"exclude_pattern"`
+	Symbol         string `json:"symbol"`
+	ContextLines   int    `json:"context_lines"`
 }
 
 type FuncMatch struct {
@@ -93,6 +97,9 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	pattern, err := CompilePattern(a.Pattern, a.CaseSensitive)
 	if err != nil {
 		return nil, fmt.Errorf("invalid regex pattern: %v", err)
+	}
+	if a.Symbol != "" {
+		return scopedSearch(a, pattern)
 	}
 
 	fetchMax := a.MaxResults
@@ -372,4 +379,128 @@ func SummarizeBody(body string, n int) string {
 		}
 	}
 	return buf.String()
+}
+
+func scopedSearch(a args, patRe *regexp.Regexp) (*server.ToolCallResult, error) {
+	if a.ContextLines <= 0 {
+		a.ContextLines = 2
+	}
+	if a.ContextLines > 8 {
+		a.ContextLines = 8
+	}
+	symbolRe, err := CompilePattern(`\b`+regexp.QuoteMeta(a.Symbol)+`\b`, a.CaseSensitive)
+	if err != nil {
+		return nil, fmt.Errorf("invalid symbol name: %v", err)
+	}
+
+	var symbols []FuncMatch
+	funcs, _ := Search(a.Path, a.Include, symbolRe, 20, IsFuncSig)
+	for _, f := range funcs {
+		if symbolRe.MatchString(f.Name) {
+			symbols = append(symbols, f)
+		}
+	}
+	types, _ := Search(a.Path, a.Include, symbolRe, 20, IsStructSig)
+	for _, t := range types {
+		if symbolRe.MatchString(t.Name) {
+			symbols = append(symbols, t)
+		}
+	}
+
+	if len(symbols) == 0 {
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("Symbol %q not found.", a.Symbol)}},
+		}, nil
+	}
+
+	var buf strings.Builder
+	totalMatches := 0
+
+	for _, sym := range symbols {
+		rel := server.RelPath(sym.File)
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(sym.File)), ".")
+		ctx := a.ContextLines
+		bodyLines := strings.Split(sym.Body, "\n")
+		var hitIdxs []int
+		for i, line := range bodyLines {
+			if patRe.MatchString(line) {
+				hitIdxs = append(hitIdxs, i)
+			}
+		}
+		if len(hitIdxs) == 0 {
+			continue
+		}
+		totalMatches += len(hitIdxs)
+
+		startLine := sym.Line
+		if startLine == 0 {
+			startLine = 1
+		}
+
+		fmt.Fprintf(&buf, "%d matches for /%s/ in %q (%s:L%d-%d):\n\n",
+			len(hitIdxs), a.Pattern, sym.Name, rel, startLine, sym.EndLine)
+
+		type window struct {
+			start, end int
+			matches    map[int]bool
+		}
+		var windows []window
+		for _, idx := range hitIdxs {
+			ws := max(0, idx-ctx)
+			we := min(len(bodyLines)-1, idx+ctx)
+			if len(windows) > 0 && ws <= windows[len(windows)-1].end+1 {
+				last := &windows[len(windows)-1]
+				last.end = max(last.end, we)
+				last.matches[idx] = true
+			} else {
+				windows = append(windows, window{start: ws, end: we, matches: map[int]bool{idx: true}})
+			}
+		}
+
+		for _, w := range windows {
+			fmt.Fprintf(&buf, "```%s\n", ext)
+			for i := w.start; i <= w.end; i++ {
+				absLine := startLine + i
+				if w.matches[i] {
+					fmt.Fprintf(&buf, "> L%d: %s\n", absLine, bodyLines[i])
+				} else {
+					fmt.Fprintf(&buf, "  L%d: %s\n", absLine, bodyLines[i])
+				}
+			}
+			buf.WriteString("```\n\n")
+		}
+	}
+
+	if totalMatches == 0 {
+		return &server.ToolCallResult{
+			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("No matches for /%s/ inside %q.", a.Pattern, a.Symbol)}},
+		}, nil
+	}
+
+	output := buf.String()
+	if a.TokenBudget > 0 && len(output) > a.TokenBudget {
+		var terse strings.Builder
+		for _, sym := range symbols {
+			rel := server.RelPath(sym.File)
+			lines := strings.Split(sym.Body, "\n")
+			startLine := sym.Line
+			if startLine == 0 {
+				startLine = 1
+			}
+			for i, line := range lines {
+				if patRe.MatchString(line) {
+					fmt.Fprintf(&terse, "%s:%d: %s\n", rel, startLine+i, strings.TrimSpace(line))
+				}
+			}
+		}
+		output = terse.String()
+		if len(output) > a.TokenBudget {
+			output = output[:a.TokenBudget]
+		}
+		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. Use names_only=true or reduce scope for more.]\n", a.TokenBudget)
+	}
+
+	return &server.ToolCallResult{
+		Content: []server.ToolCallContent{{Type: "text", Text: output}},
+	}, nil
 }

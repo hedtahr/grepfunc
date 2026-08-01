@@ -21,7 +21,7 @@ WARNING: Never store file paths, line numbers, function signatures, or code loca
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":      {Type: "string", Description: "MUST be absolute path to project directory (e.g. '/Users/you/myproject'). Orients all tools to this project. Memory is stored per-project at <project>/.llm/memory.json."},
+			"path":      {Type: "string", Description: "Project directory. Optional — defaults to the opened project root. Memory is stored per-project at <project>/.llm/memory.json."},
 			"key":       {Type: "string", Description: "Fact key using dot notation (e.g. 'style.comments', 'conventions.naming', 'decisions.engine'). Avoid keys like 'file.X' or 'location.Y' — those go stale."},
 			"value":     {Type: "string", Description: "Value to store. Required when saving. Omit to just recall."},
 			"delete":    {Type: "boolean", Description: "Set true to forget this key."},

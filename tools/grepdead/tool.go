@@ -16,11 +16,11 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_dead",
-	Description: "Find declared symbols (functions, types) that have zero references outside their declaration file. Identifies potentially dead code. Searches the whole project — use 'include' to narrow scope. Can be slow on large codebases; use max_symbols to cap.",
+	Description: "Use when you need to identify dead code — declared symbols with zero references outside their declaring file. Two-pass analysis (find declarations, then verify references) that native grep can't do in a single query. Can be slow on large codebases; cap with max_symbols.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":        {Type: "string", Description: "MUST be absolute path to root directory to search."},
+			"path":        {Type: "string", Description: "Root directory to search. Optional — defaults to the opened project root."},
 			"include":     {Type: "string", Description: "Glob to filter files for both declaration and reference search. E.g. '**/*.go'."},
 			"kind":        {Type: "string", Description: "Symbol kind to check: 'func', 'type', or 'all' (default)."},
 			"min_lines":   {Type: "integer", Description: "Skip symbols with body shorter than this many lines. Default 2 (skips trivial one-liners)."},

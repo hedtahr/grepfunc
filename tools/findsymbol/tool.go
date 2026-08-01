@@ -14,19 +14,19 @@ import (
 
 var Tool = server.Tool{
 	Name:        "find_symbol",
-	Description: "Find a function, method, struct, class, interface, or enum by exact or substring name. Faster and cheaper than grep_func/grep_struct when you know the name — uses exact word-boundary matching first, falls back to substring. Returns location + first line of signature. Use when you know WHAT you're looking for but not WHERE it is.",
+	Description: "Use when you know a symbol's NAME and need its location, signature, or full definition. Returns file:line + signature — set body=true for the complete body in one call (absorbs read_symbol). Word-boundary match first, substring fallback, then typo suggestions.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name":           {Type: "string", Description: "Symbol name to find. Matches function/method/type names. Examples: 'Handle', 'UserService', 'findRelated'. Case-insensitive by default."},
-			"path":           {Type: "string", Description: "MUST be absolute path to file or directory to search."},
+			"path":           {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
 			"include":        {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. If omitted, auto-filtered to common source extensions."},
 			"kind":           {Type: "string", Description: "Filter by kind: 'func' (functions/methods only), 'type' (structs/classes/interfaces/enums only), or 'any' (default)."},
 			"max_results":    {Type: "integer", Description: "Max results. Default 10, max 30."},
 			"case_sensitive": {Type: "boolean", Description: "Case-sensitive matching. Default: false."},
 			"compact":        {Type: "boolean", Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false."},
 			"names_only":     {Type: "boolean", Description: "If true, return only file:line:name — no code blocks. Cheapest mode."},
-			"body":           {Type: "boolean", Description: "If true, return the full body of each matched symbol. Eliminates the find_symbol → read_symbol two-step. Default false (signature only)."},
+			"body":           {Type: "boolean", Description: "If true, return the full body of each matched symbol — no second look-up call needed. Default false (signature only)."},
 			"token_budget":   {Type: "integer", Description: "Max output chars. If exceeded, auto-switches to names_only. No default (unlimited)."},
 			"summary":        {Type: "boolean", Description: "If true and body=true, truncate large bodies: shows first+last N lines with omission count."},
 			"summary_lines":  {Type: "integer", Description: "Lines to show at start and end when summary=true. Default 5."},
@@ -179,7 +179,6 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 	}, nil
 }
-
 
 func searchSymbols(a args, pattern *regexp.Regexp) []grepfunc.FuncMatch {
 	var results []grepfunc.FuncMatch

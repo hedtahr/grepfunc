@@ -17,7 +17,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path": {Type: "string", Description: "MUST be absolute path to file."},
+			"path": {Type: "string", Description: "File to look up. Absolute path or project-relative."},
 			"line": {Type: "integer", Description: "1-based line number to look up."},
 		},
 		Required: []string{"path", "line"},

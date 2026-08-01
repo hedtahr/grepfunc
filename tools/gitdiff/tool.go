@@ -18,7 +18,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":          {Type: "string", Description: "MUST be absolute path to specific file to diff. Omit for all changed files."},
+			"path":          {Type: "string", Description: "Specific file to diff. Absolute path or project-relative. Omit for all changed files."},
 			"staged":        {Type: "boolean", Description: "Show staged (--cached) changes. Default false."},
 			"context_lines": {Type: "integer", Description: "Lines of context around changes. Default 3, max 10."},
 			"stat_only":     {Type: "boolean", Description: "Show only --stat summary (no line diff)."},

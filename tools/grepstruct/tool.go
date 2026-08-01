@@ -13,12 +13,12 @@ import (
 
 var Tool = server.Tool{
 	Name:        "grep_struct",
-	Description: "Search for struct/class/interface/enum/type definitions matching a pattern and return complete bodies with line numbers. Returns the full definition (signature + body), not just matching lines. Use BEFORE editing to understand data models, type hierarchies, or class structures.",
+	Description: "Use when you need data models — struct/class/interface/enum/type definitions to read or edit. Returns full type bodies with line numbers, brace-aware — native grep only returns matching lines. body=true returns full bodies; default returns name + location. For plain-text search use grep instead.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"pattern":         {Type: "string", Description: "Regex pattern to match against type names or body contents. Matches anywhere inside the definition. Examples: 'User', 'Handler', 'interface', 'class.*Service'."},
-			"path":            {Type: "string", Description: "MUST be absolute path to file or directory to search."},
+			"path":            {Type: "string", Description: "Directory to search. Optional — defaults to the opened project root."},
 			"include":         {Type: "string", Description: "Glob to filter files. Supports ** for recursive matching. Examples: '**/*.go', '**/*.ts', '**/*.java'. If omitted, auto-filtered to common source extensions."},
 			"max_results":     {Type: "integer", Description: "Max definitions to return. Default 15, max 50."},
 			"offset":          {Type: "integer", Description: "Starting position for paginated results (0-based)."},

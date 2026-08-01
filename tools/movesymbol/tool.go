@@ -18,8 +18,8 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name":    {Type: "string", Description: "Name of the symbol to move. Exact match."},
-			"src":     {Type: "string", Description: "MUST be absolute path to source file."},
-			"dst":     {Type: "string", Description: "MUST be absolute path to destination file."},
+			"src":     {Type: "string", Description: "Source file containing the symbol. Absolute path or project-relative."},
+			"dst":     {Type: "string", Description: "Destination file. Absolute path or project-relative."},
 			"line":    {Type: "integer", Description: "Line number in dst to insert before. If omitted, appends to end of dst. If the target line has non-whitespace code, the operation is refused."},
 			"dry_run": {Type: "boolean", Description: "Preview changes without writing files."},
 		},

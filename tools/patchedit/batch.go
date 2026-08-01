@@ -27,7 +27,7 @@ var BatchTool = server.Tool{
 			"fail_fast":     {Type: "boolean", Description: "If true (default), skip files where any edit fails to match — don't partially edit them. Set false to apply successful edits even when some fail."},
 			"skip_validate": {Type: "boolean", Description: "Skip post-write validation (go vet / python ast)."},
 			"no_diff":       {Type: "boolean", Description: "Omit per-file diff output. Set true for summary-only (saves tokens). Set false to see per-file diffs."},
-			"path":          {Type: "string", Description: "MUST be absolute path — root directory to search. Always provide explicitly; do not rely on default."},
+			"path":          {Type: "string", Description: "Root directory to search. Optional — defaults to the opened project root."},
 		},
 		Required: []string{"glob", "edits"},
 	},

@@ -16,7 +16,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":       {Type: "string", Description: "MUST be absolute path to file to estimate. Required."},
+			"path":       {Type: "string", Description: "Target file to estimate. Absolute path or project-relative (resolved against the opened project root)."},
 			"start_line": {Type: "integer", Description: "First line of range (1-based). Optional."},
 			"end_line":   {Type: "integer", Description: "Last line of range (1-based, inclusive). Optional."},
 		},

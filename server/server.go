@@ -245,12 +245,13 @@ func (s *Server) handle(req Request) *Response {
 			fmt.Fprintf(f, "[call] tool=%s args=%s\n", params.Name, string(args))
 			f.Close()
 		}
-		// Allow per-call cwd override (Zed may not send rootPath in initialize)
+		// Allow per-call cwd override only until a real project root exists.
+		// Ignore it afterwards to prevent mid-session re-rooting to a stale value.
 		var cwdExtract struct {
 			CWD string `json:"cwd"`
 		}
 		json.Unmarshal(args, &cwdExtract)
-		if cwdExtract.CWD != "" {
+		if cwdExtract.CWD != "" && !projectRootLocked && (ProjectRoot == "" || ProjectRoot == ".") {
 			if resolved, err := filepath.EvalSymlinks(cwdExtract.CWD); err == nil {
 				cwdExtract.CWD = resolved
 			}
