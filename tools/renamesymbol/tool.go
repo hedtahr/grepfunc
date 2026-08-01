@@ -116,7 +116,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 			return nil
 		}
 
-		newData := re.ReplaceAll(data, []byte(a.NewName))
+		newData := re.ReplaceAll(data, []byte(strings.ReplaceAll(a.NewName, "$", "$$")))
 		changes = append(changes, fileChange{rel: rel, count: len(matches)})
 		totalReplacements += len(matches)
 

@@ -44,6 +44,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("path is required (no previous path in session)")
 	}
 	a.Path = server.ResolvePath(a.Path)
+	if err := server.CheckBounds(a.Path); err != nil {
+		return nil, err
+	}
+	if err := server.CheckBanned(a.Path); err != nil {
+		return nil, err
+	}
 	server.SetLastPath(a.Path)
 	related := findRelated(a.Path)
 
@@ -135,6 +141,9 @@ func findRelated(filePath string) []string {
 
 	// 2. Walk up to find sibling directories with same-named files
 	projectRoot := server.FindProjectRoot(dir)
+	if projectRoot == "" {
+		projectRoot = dir
+	}
 	if filepath.Dir(projectRoot) == projectRoot {
 		projectRoot = dir
 	}

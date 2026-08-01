@@ -54,6 +54,9 @@ const (
 // storePath returns the memory file path for a project directory. Overridable for tests.
 var storePath = func(projectDir string) (string, error) {
 	root := server.FindProjectRoot(projectDir)
+	if root == "" {
+		root = projectDir
+	}
 	if !filepath.IsAbs(root) {
 		if abs, err := filepath.Abs(root); err == nil {
 			root = abs
@@ -266,10 +269,10 @@ func mergeEntry(s store, key, value string) store {
 			if len(parts) == 1 {
 				parts = strings.Split(existing, "\n")
 			}
-			// Check if new value already present (case-insensitive substring)
-			newLower := strings.ToLower(strings.TrimSpace(value))
+			// Check if new value already present (case-insensitive exact match)
+			newVal := strings.TrimSpace(value)
 			for _, p := range parts {
-				if strings.Contains(strings.ToLower(strings.TrimSpace(p)), newLower) || strings.Contains(newLower, strings.ToLower(strings.TrimSpace(p))) {
+				if strings.EqualFold(strings.TrimSpace(p), newVal) {
 					return s // already present, no change
 				}
 			}

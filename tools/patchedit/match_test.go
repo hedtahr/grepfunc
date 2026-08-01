@@ -87,6 +87,42 @@ func TestOffsetToLines(t *testing.T) {
 	}
 }
 
+// Regression: matches ending exactly at a line boundary (old_text ends with \n)
+// used to report LineEnd one line too high.
+func TestOffsetToLinesBoundary(t *testing.T) {
+	content := []byte("line1\nline2\nline3\n")
+	lt := buildLineTable(content)
+	cases := []struct {
+		start, end     int
+		wantLs, wantLe int
+	}{
+		{0, 6, 1, 2},  // "line1\n" — line 1 only
+		{6, 12, 2, 3}, // "line2\n" — line 2 only
+		{0, 12, 1, 3}, // "line1\nline2\n" — lines 1-2
+	}
+	for _, c := range cases {
+		ls, le := lineOffsetsToLines(lt, c.start, c.end)
+		if ls != c.wantLs || le != c.wantLe {
+			t.Errorf("lineOffsetsToLines(%d,%d) = (%d,%d), want (%d,%d)",
+				c.start, c.end, ls, le, c.wantLs, c.wantLe)
+		}
+	}
+}
+
+// Edge: multi-line match in a file whose last line has no trailing newline.
+func TestOffsetToLinesNoTrailingNewline(t *testing.T) {
+	content := []byte("a\nb") // 2 lines, no trailing \n
+	lt := buildLineTable(content)
+	ls, le := lineOffsetsToLines(lt, 0, 3) // "a\nb"
+	if ls != 1 || le != 3 {
+		t.Errorf("lineOffsetsToLines(0,3) = (%d,%d), want (1,3)", ls, le)
+	}
+	ls, le = lineOffsetsToLines(lt, 2, 3) // "b"
+	if ls != 2 || le != 3 {
+		t.Errorf("lineOffsetsToLines(2,3) = (%d,%d), want (2,3)", ls, le)
+	}
+}
+
 func TestFindNearest(t *testing.T) {
 	content := []byte("package main\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n")
 	n := findNearest(content, "func main(")

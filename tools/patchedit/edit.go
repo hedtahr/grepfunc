@@ -125,6 +125,7 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	results := computeResults(content, args.Inserts, args.Edits)
+	results = detectOverlaps(results)
 
 	// #14: auto no_diff when >3 total ops
 	showDiff := !args.NoDiff
@@ -163,6 +164,46 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	return buildResponse(args.Path, original, content, current, results, args.DryRun, args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false, args.Terse)
+}
+
+// detectOverlaps fails edits whose match regions intersect. Applying overlapping
+// edits against shifting content would silently corrupt the file, so the
+// higher-offset edit is rejected instead.
+func detectOverlaps(results []editResult) []editResult {
+	type locRef struct {
+		res *editResult
+		loc MatchLoc
+	}
+	var list []locRef
+	for i := range results {
+		if results[i].Success && len(results[i].Matches) > 0 {
+			for _, loc := range results[i].Matches {
+				list = append(list, locRef{res: &results[i], loc: loc})
+			}
+		}
+	}
+	for i := 0; i < len(list); i++ {
+		for j := i + 1; j < len(list); j++ {
+			if !rangesOverlap(list[i].loc, list[j].loc) {
+				continue
+			}
+			fail := list[j].res
+			if list[i].loc.Offset > list[j].loc.Offset {
+				fail = list[i].res
+			}
+			if fail.Success {
+				fail.Success = false
+				fail.Error = fmt.Sprintf("OVERLAP: region %d-%d intersects region %d-%d of another edit; remove or merge one.",
+					list[i].loc.Offset, list[i].loc.EndOffset, list[j].loc.Offset, list[j].loc.EndOffset)
+			}
+		}
+	}
+	return results
+}
+
+// rangesOverlap reports whether two match regions intersect (or one point lies inside the other).
+func rangesOverlap(a, b MatchLoc) bool {
+	return a.Offset < b.EndOffset && b.Offset < a.EndOffset
 }
 
 func computeResults(content []byte, inserts []InsertOp, edits []EditOp) []editResult {

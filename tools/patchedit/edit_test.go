@@ -210,3 +210,115 @@ func TestMultiEditOffsetSafety(t *testing.T) {
 		t.Errorf("old high-offset text still present: %q", got)
 	}
 }
+
+// Regression: matches whose text ends with a newline used to report
+// LineEnd one line too high.
+func TestLineEndWithTrailingNewline(t *testing.T) {
+	content := []byte("line1\nline2\nline3\n")
+	r := findAndReplace(content, EditOp{OldText: "line1\n", NewText: "X\n"}, 0)
+	if !r.Success {
+		t.Fatalf("match failed: %s", r.Error)
+	}
+	if r.Matches[0].LineStart != 1 || r.Matches[0].LineEnd != 2 {
+		t.Errorf("line range = %d-%d, want 1-2", r.Matches[0].LineStart, r.Matches[0].LineEnd)
+	}
+
+	r = findAndReplace(content, EditOp{OldText: "line2\nline3", NewText: "Y"}, 0)
+	if !r.Success {
+		t.Fatalf("multi-line match failed: %s", r.Error)
+	}
+	if r.Matches[0].LineStart != 2 || r.Matches[0].LineEnd != 4 {
+		t.Errorf("line range = %d-%d, want 2-4", r.Matches[0].LineStart, r.Matches[0].LineEnd)
+	}
+}
+
+// Overlapping edits must be rejected instead of silently corrupting the file.
+func TestOverlappingEditsRejected(t *testing.T) {
+	content := []byte("foo bar baz\n")
+	edits := []EditOp{
+		{OldText: "foo bar", NewText: "FOO", Index: 1},
+		{OldText: "bar baz", NewText: "BAZ", Index: 2},
+	}
+	results := computeResults(content, nil, edits)
+	results = detectOverlaps(results)
+
+	ok, failed := 0, 0
+	for _, r := range results {
+		if r.Success {
+			ok++
+		} else {
+			failed++
+			if !strings.Contains(r.Error, "OVERLAP") {
+				t.Errorf("edit %d error should mention OVERLAP: %s", r.Index, r.Error)
+			}
+		}
+	}
+	if ok != 1 || failed != 1 {
+		t.Fatalf("want 1 applied + 1 rejected, got %d + %d", ok, failed)
+	}
+
+	// Applying the surviving edit must produce clean output, no corruption.
+	var out []byte = content
+	for _, r := range results {
+		if r.Success {
+			out = applyReplacement(out, r)
+		}
+	}
+	got := string(out)
+	if !strings.Contains(got, "FOO") || strings.Contains(got, "bar") || strings.Contains(got, "BAZ") {
+		t.Errorf("surviving edit corrupted the file: %q", got)
+	}
+}
+
+// An insert landing inside an edit region conflicts; at the boundary it is fine.
+func TestInsertInsideEditRegionRejected(t *testing.T) {
+	content := []byte("line1\nline2\n")
+	ins := []InsertOp{{Line: 2, Text: "mid\n", Index: 1}}
+	edits := []EditOp{{OldText: "line1\nline2", NewText: "XXX", Index: 2}}
+	results := detectOverlaps(computeResults(content, ins, edits))
+
+	editOK, insertOK := false, false
+	for _, r := range results {
+		if r.Success {
+			if r.Matches[0].Strategy == "insert" {
+				insertOK = true
+			} else {
+				editOK = true
+			}
+		}
+	}
+	if !editOK {
+		t.Error("edit should survive; the mid-region insert must be rejected")
+	}
+	if insertOK {
+		t.Error("insert landing inside the edit region should be rejected")
+	}
+
+	// Insert exactly at the edit region boundary (line 1) is fine.
+	ins = []InsertOp{{Line: 1, Text: "pre\n", Index: 1}}
+	results = detectOverlaps(computeResults(content, ins, edits))
+	applied := 0
+	for _, r := range results {
+		if r.Success {
+			applied++
+		}
+	}
+	if applied != 2 {
+		t.Errorf("boundary insert should coexist with the edit, got %d applied", applied)
+	}
+}
+
+// Non-overlapping edits pass overlap detection untouched.
+func TestNonOverlappingEditsPass(t *testing.T) {
+	content := []byte("alpha\nbeta\n")
+	edits := []EditOp{
+		{OldText: "alpha", NewText: "A", Index: 1},
+		{OldText: "beta", NewText: "B", Index: 2},
+	}
+	results := detectOverlaps(computeResults(content, nil, edits))
+	for _, r := range results {
+		if !r.Success {
+			t.Errorf("edit %d should pass: %s", r.Index, r.Error)
+		}
+	}
+}

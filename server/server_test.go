@@ -22,6 +22,10 @@ func TestIsBannedPath(t *testing.T) {
 		{"/home/user/.ssh/id_ecdsa", true},
 		{"/home/user/.ssh/id_dsa", true},
 		{"/home/user/.aws/credentials", true},
+		{"/home/user/.aws/credentials.json", true},
+		{"/home/user/secrets.yml", true},
+		{"/home/user/secrets.json", true},
+		{"/home/user/.envrc", true},
 		{"/certs/server.pem", true},
 		{"/certs/server.key", true},
 		{"/certs/client.p12", true},
@@ -155,5 +159,134 @@ func TestCheckBanned(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "access denied") {
 		t.Errorf("error should say 'access denied': %v", err)
+	}
+}
+
+func TestFindProjectRoot(t *testing.T) {
+	dir := t.TempDir()
+
+	// No marker anywhere up the tree: must return "", not cwd or "/".
+	if got := FindProjectRoot(dir); got != "" {
+		t.Errorf("FindProjectRoot(no marker) = %q, want \"\"", got)
+	}
+
+	// Marker in parent dir is found by walking up.
+	markerDir := filepath.Join(dir, "proj")
+	os.MkdirAll(filepath.Join(markerDir, "src", "pkg"), 0755)
+	os.WriteFile(filepath.Join(markerDir, "go.mod"), []byte("module t"), 0644)
+	if got := FindProjectRoot(filepath.Join(markerDir, "src", "pkg")); got != markerDir {
+		t.Errorf("FindProjectRoot(marker) = %q, want %q", got, markerDir)
+	}
+	if got := FindProjectRoot(markerDir); got != markerDir {
+		t.Errorf("FindProjectRoot(marker dir itself) = %q, want %q", got, markerDir)
+	}
+}
+
+func TestResolvePathNoMarkerReorient(t *testing.T) {
+	origRoot := ProjectRoot
+	origLocked := projectRootLocked
+	defer func() { ProjectRoot = origRoot; projectRootLocked = origLocked }()
+
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "x.go")
+
+	// Unlocked: adopts the file's dir WITHOUT locking.
+	ProjectRoot = "/tmp/prj"
+	projectRootLocked = false
+	got := ResolvePath(f)
+	if got != f {
+		t.Fatalf("ResolvePath = %q, want %q", got, f)
+	}
+	if ProjectRoot != tmp {
+		t.Errorf("ProjectRoot = %q, want %q (dir of path, no marker)", ProjectRoot, tmp)
+	}
+	if projectRootLocked {
+		t.Error("projectRootLocked should stay false when no marker found")
+	}
+
+	// Locked: no re-orientation at all.
+	ProjectRoot = "/tmp/prj"
+	projectRootLocked = true
+	got = ResolvePath(f)
+	if got != f {
+		t.Fatalf("ResolvePath (locked) = %q, want %q", got, f)
+	}
+	if ProjectRoot != "/tmp/prj" {
+		t.Errorf("ProjectRoot changed while locked: %q", ProjectRoot)
+	}
+}
+
+func TestResolvePathReorientWithMarker(t *testing.T) {
+	origRoot := ProjectRoot
+	origLocked := projectRootLocked
+	defer func() { ProjectRoot = origRoot; projectRootLocked = origLocked }()
+
+	proj := t.TempDir()
+	os.WriteFile(filepath.Join(proj, "go.mod"), []byte("module t"), 0644)
+	f := filepath.Join(proj, "main.go")
+
+	ProjectRoot = "/tmp/prj"
+	projectRootLocked = true
+	got := ResolvePath(f)
+	if got != f {
+		t.Fatalf("ResolvePath = %q, want %q", got, f)
+	}
+	if ProjectRoot != proj {
+		t.Errorf("ProjectRoot = %q, want %q (re-oriented to marker project)", ProjectRoot, proj)
+	}
+	if !projectRootLocked {
+		t.Error("re-orientation to a marker project should lock the root")
+	}
+}
+
+func TestInitLogGated(t *testing.T) {
+	// No env set: nothing written.
+	t.Setenv("GREPFUNC_INIT_LOG", "")
+	logPath := filepath.Join(t.TempDir(), "init.log")
+	t.Setenv("GREPFUNC_INIT_LOG", logPath)
+
+	// First call truncates (fresh session), subsequent calls append.
+	logInitf("one %d", 1)
+	logInitf("two %d", 2)
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("log not written when env set: %v", err)
+	}
+	if !strings.Contains(string(data), "one 1") || !strings.Contains(string(data), "two 2") {
+		t.Errorf("unexpected log content: %q", data)
+	}
+
+	// Gated off entirely when env is cleared.
+	t.Setenv("GREPFUNC_INIT_LOG", "")
+	logInitf("three")
+	data, _ = os.ReadFile(logPath)
+	if strings.Contains(string(data), "three") {
+		t.Errorf("log written with env unset: %q", data)
+	}
+}
+
+func TestPendingRootApplied(t *testing.T) {
+	origRoot := ProjectRoot
+	origLocked := projectRootLocked
+	defer func() { ProjectRoot = origRoot; projectRootLocked = origLocked }()
+
+	ProjectRoot = "/tmp/prj"
+	projectRootLocked = false
+	newRoot := t.TempDir()
+	pendingRoot.Store(newRoot)
+
+	s := New("test", "0")
+	resp := s.handle(Request{JSONRPC: "2.0", ID: 1, Method: "tools/list"})
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("tools/list failed: %+v", resp)
+	}
+	if ProjectRoot != newRoot {
+		t.Errorf("ProjectRoot = %q, want %q (applied from pendingRoot)", ProjectRoot, newRoot)
+	}
+	if !projectRootLocked {
+		t.Error("applied root should be locked")
+	}
+	if v, _ := pendingRoot.Load().(string); v != "" {
+		t.Errorf("pendingRoot not cleared, got %q", v)
 	}
 }

@@ -59,6 +59,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("name is required")
 	}
 	a.Path = server.ResolvePath(a.Path)
+	if err := server.CheckBounds(a.Path); err != nil {
+		return nil, err
+	}
+	if err := server.CheckBanned(a.Path); err != nil {
+		return nil, err
+	}
 	if a.MaxResults <= 0 {
 		a.MaxResults = 10
 	}

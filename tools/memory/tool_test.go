@@ -114,6 +114,41 @@ func TestUpsertOverwrites(t *testing.T) {
 	}
 }
 
+// merge must keep distinct values even when one is a substring of the other,
+// while still deduplicating exact repeats.
+func TestMergeDistinctSubstringsKept(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	merge(t, "langs", "golang")
+	merge(t, "langs", "go")
+
+	raw, _ := json.Marshal(map[string]any{"key": "langs"})
+	result, _ := Handle(raw)
+	text := result.Content[0].Text
+	if !strings.Contains(text, "golang") || !strings.Contains(text, "go") {
+		t.Errorf("merge dropped a distinct value: %q", text)
+	}
+
+	// Exact repeat is deduplicated.
+	merge(t, "langs", "golang")
+	raw, _ = json.Marshal(map[string]any{"key": "langs"})
+	result, _ = Handle(raw)
+	if strings.Count(result.Content[0].Text, "golang") != 1 {
+		t.Errorf("exact repeat should be deduped: %q", result.Content[0].Text)
+	}
+}
+
+func merge(t *testing.T, key, value string) {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"key": key, "value": value, "merge": true})
+	if _, err := Handle(raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLRUEviction(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")

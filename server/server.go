@@ -45,6 +45,24 @@ func SetLastPath(p string) {
 	}
 }
 
+var initLogOnce sync.Once
+
+// logInitf writes debug diagnostics to the path in GREPFUNC_INIT_LOG (if set).
+// No-op by default: the per-call payload log is opt-in only.
+func logInitf(format string, args ...any) {
+	p := os.Getenv("GREPFUNC_INIT_LOG")
+	if p == "" {
+		return
+	}
+	initLogOnce.Do(func() { os.WriteFile(p, nil, 0644) })
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, format+"\n", args...)
+	f.Close()
+}
+
 // SessionCache is a cross-tool cache for expensive lookups (e.g., symbol bodies).
 var (
 	SessionCache   = map[string]any{}
@@ -117,6 +135,18 @@ func (s *Server) Run() {
 }
 
 func (s *Server) handle(req Request) *Response {
+	// Apply any root queued by roots/list (Run goroutine only — race-free).
+	if queuedRoot, ok := pendingRoot.Load().(string); ok && queuedRoot != "" {
+		pendingRoot.Store("")
+		if queuedRoot != ProjectRoot || !projectRootLocked {
+			s.projectRoot = queuedRoot
+			ProjectRoot = queuedRoot
+			projectRootLocked = true
+			fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (roots/list, locked)\n", ProjectRoot)
+			go persistProjectRoot(queuedRoot)
+			go autoDiscover(queuedRoot)
+		}
+	}
 	switch req.Method {
 	case "initialize":
 		var initParams struct {
@@ -134,15 +164,8 @@ func (s *Server) handle(req Request) *Response {
 		}
 		fmt.Fprintf(os.Stderr, "[mcp] initialize: rootPath=%q rootUri=%q roots=%d\n",
 			initParams.RootPath, initParams.RootURI, len(initParams.Roots))
-		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-			fmt.Fprintf(f, "raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d\n",
-				string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
-			for i, r := range initParams.Roots {
-				fmt.Fprintf(f, "  roots[%d].uri=%q\n", i, r.URI)
-			}
-			fmt.Fprintf(f, "  caps.roots=%v\n", initParams.Capabilities.Roots != nil)
-			f.Close()
-		}
+		logInitf("raw params: %s\nrootPath=%q\nrootUri=%q\nroots=%d",
+			string(req.Params), initParams.RootPath, initParams.RootURI, len(initParams.Roots))
 		s.clientHasRoots = initParams.Capabilities.Roots != nil
 		root := initParams.RootPath
 		if root == "" {
@@ -187,11 +210,10 @@ func (s *Server) handle(req Request) *Response {
 			go writeCachedRoot(root)
 		}
 		// Append resolved root + existence check to init log
-		if f, err := os.OpenFile("/tmp/grepfunc-init.log", os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		{
 			_, statErr := os.Stat(root)
-			fmt.Fprintf(f, "ProjectRoot=%q exists=%v editorProvided=%v clientHasRoots=%v\ncwd=%q exe=%q\n",
+			logInitf("ProjectRoot=%q exists=%v editorProvided=%v clientHasRoots=%v\ncwd=%q exe=%q",
 				root, statErr == nil, editorProvided, s.clientHasRoots, cwdAtStart, exePath)
-			f.Close()
 		}
 		if editorProvided {
 			projectRootLocked = true
@@ -362,15 +384,8 @@ func (s *Server) requestRoots() {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	if root == ProjectRoot && projectRootLocked {
-		return
-	}
-	s.projectRoot = root
-	ProjectRoot = root
-	projectRootLocked = true
-	fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (roots/list, locked)\n", ProjectRoot)
-	go persistProjectRoot(root)
-	go autoDiscover(root)
+	pendingRoot.Store(root)
+	fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s queued from roots/list\n", root)
 }
 
 // ResolvePath resolves a tool path argument relative to the project root.
@@ -379,7 +394,7 @@ func (s *Server) requestRoots() {
 // IsBannedPath reports whether p is a protected secret file.
 func IsBannedPath(p string) bool {
 	base := filepath.Base(p)
-	if base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasPrefix(base, ".env_") {
+	if strings.HasPrefix(base, ".env") || strings.HasPrefix(base, "credentials.") || strings.HasPrefix(base, "secrets.") {
 		return true
 	}
 	switch base {
@@ -417,6 +432,10 @@ func CheckBounds(p string) error {
 
 var projectRootLocked bool
 
+// pendingRoot queues a root from roots/list to be applied by the Run loop,
+// keeping all ProjectRoot writes on a single goroutine (no data race).
+var pendingRoot atomic.Value // string; "" = none
+
 // LockProjectRoot prevents further re-orientation of ProjectRoot.
 func LockProjectRoot() {
 	projectRootLocked = true
@@ -430,11 +449,12 @@ func ResolvePath(p string) string {
 		lastDir = filepath.Dir(p)
 		cleanRoot := filepath.Clean(ProjectRoot)
 		// If path is NOT under current ProjectRoot, try to re-orient.
-		if ProjectRoot == "" || !strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
-			if root := FindProjectRoot(filepath.Dir(p)); root != "/" {
+		underRoot := filepath.Clean(p) + string(filepath.Separator)
+		if ProjectRoot == "" || !strings.HasPrefix(underRoot, cleanRoot+string(filepath.Separator)) {
+			if root := FindProjectRoot(filepath.Dir(p)); root != "" {
 				ProjectRoot = root
 				projectRootLocked = true
-			} else if root == "/" && !projectRootLocked {
+			} else if !projectRootLocked {
 				ProjectRoot = filepath.Dir(p)
 			}
 		} else {
@@ -520,6 +540,7 @@ func persistProjectRoot(root string) {
 }
 
 // FindProjectRoot walks up from dir looking for a project marker file.
+// Returns "" when no marker is found.
 // cachedRootFile returns the path to the persisted last-known project root.
 func cachedRootFile() string {
 	home, _ := os.UserHomeDir()
@@ -554,10 +575,7 @@ func FindProjectRoot(dir string) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			if cwd, err := os.Getwd(); err == nil {
-				return cwd
-			}
-			return dir
+			return ""
 		}
 		dir = parent
 	}

@@ -111,6 +111,14 @@ func handleMulti(a args) (*server.ToolCallResult, error) {
 	}
 
 	// Expand entries in parallel (each glob does a WalkDir)
+	// Expand entries in parallel (each glob does a WalkDir)
+	for _, e := range a.Reads {
+		if isGlob(e.Path) && filepath.IsAbs(e.Path) {
+			if rel, err := filepath.Rel(server.ProjectRoot, e.Path); err != nil || strings.HasPrefix(rel, "..") {
+				return nil, fmt.Errorf("glob %q is outside project root %q", e.Path, server.ProjectRoot)
+			}
+		}
+	}
 	slots := make([][]readEntry, len(a.Reads))
 	var wg sync.WaitGroup
 	for i, e := range a.Reads {
@@ -213,9 +221,11 @@ func handleGlob(a args) (*server.ToolCallResult, error) {
 
 	// If glob is absolute and inside root, make it relative so MatchGlob works against rel paths
 	if filepath.IsAbs(glob) {
-		if rel, err := filepath.Rel(root, glob); err == nil && !strings.HasPrefix(rel, "..") {
-			glob = rel
+		rel, err := filepath.Rel(root, glob)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return nil, fmt.Errorf("glob %q is outside project root %q", glob, root)
 		}
+		glob = rel
 	}
 
 	var matched []string
@@ -411,7 +421,7 @@ func renderTail(path string, n int, compact bool, buf *strings.Builder) error {
 
 	show := min(n, total)
 	count := 0
-	cutAt := len(data)
+	cutAt := 0
 	for i := len(data) - 2; i >= 0; i-- {
 		if data[i] == '\n' {
 			count++
@@ -419,9 +429,6 @@ func renderTail(path string, n int, compact bool, buf *strings.Builder) error {
 				cutAt = i + 1
 				break
 			}
-		}
-		if i == 0 {
-			cutAt = 0
 		}
 	}
 	selected := strings.TrimRight(string(data[cutAt:]), "\n")

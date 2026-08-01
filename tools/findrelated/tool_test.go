@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hedtahr/grepfunc/server"
@@ -20,6 +21,21 @@ func TestHandle(t *testing.T) {
 	}
 	if len(result.Content) == 0 {
 		t.Fatal("empty content")
+	}
+}
+
+func TestHandleBannedPath(t *testing.T) {
+	orig := server.ProjectRoot
+	server.ProjectRoot = t.TempDir()
+	defer func() { server.ProjectRoot = orig }()
+
+	banned := filepath.Join(server.ProjectRoot, ".env")
+	os.WriteFile(banned, []byte("SECRET=x\n"), 0600)
+
+	raw, _ := json.Marshal(map[string]any{"path": banned})
+	_, err := Handle(raw)
+	if err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("expected access-denied error for .env, got %v", err)
 	}
 }
 

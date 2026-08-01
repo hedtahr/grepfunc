@@ -245,7 +245,7 @@ func buildLineTable(content []byte) []int {
 
 func lineOffsetsToLines(t []int, start, end int) (int, int) {
 	ls := sort.SearchInts(t, start+1)
-	le := sort.SearchInts(t, end+1)
+	le := sort.SearchInts(t, end)
 	return ls, le + 1
 }
 
