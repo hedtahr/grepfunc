@@ -20,29 +20,25 @@ import (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "find_related",
-	Description: "Find files RELATED to a given file — tests, mocks, sibling implementations, config files. " +
-		"The fastest way to answer 'where's the test for this?' or 'what other files do I need to touch?' " +
-		"Stops you from guessing file names and wasting tokens on failed reads. " +
-		"Finds: *_test.*, *.test.*, *_mock.*, mock_*, *.spec.*, and same-named files in nearby directories.",
+	Name:        "find_related",
+	Description: "Find files RELATED to a file — tests, mocks, sibling implementations, config. Finds *_test.*, *.test.*, *_mock.*, mock_*, *.spec.*, same-named files in nearby dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        "string",
-				Description: "Source file to find related files for. Defaults to the last file operated on.",
+				Description: "Source file to find related files for. Defaults to last file operated on.",
 				Items:       nil,
 			},
 			"compact": {
 				Type:        "boolean",
-				Description: "Terse output: less whitespace, no category labels. Default false.",
+				Description: "Terse output: no category labels.",
 				Items:       nil,
 			},
 			"with_symbols": {
-				Type: "boolean",
-				Description: "If true, include top-level function and type names found in each related file. " +
-					"Saves the find_related → file_symbols two-step.",
-				Items: nil,
+				Type:        "boolean",
+				Description: "Include top-level func/type names found in each related file.",
+				Items:       nil,
 			},
 		},
 		Required:             []string{},

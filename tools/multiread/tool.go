@@ -20,39 +20,35 @@ import (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "multi_read",
-	Description: "Read file contents. path accepts a file path OR a glob (any path containing * ? [). " +
-		"For multi-file with per-entry ranges use the reads array. " +
-		"Returns total line count. Defaults to last path in session.",
+	Name:        "multi_read",
+	Description: "Read file contents. path accepts a file path OR glob (* ? [). Multi-file with per-entry ranges: use reads array. Returns total line count.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			pathKey: {
-				Type: typeString,
-				Description: "File path or glob pattern (e.g. 'tools/**/*.go'). " +
-					"Glob when contains * ? [. Defaults to last file in session.",
-				Items: nil,
+				Type:        typeString,
+				Description: "File path or glob (e.g. 'tools/**/*.go'). Defaults to last file in session.",
+				Items:       nil,
 			},
 			"reads": {
-				Type: typeArray,
-				Description: "Per-file ranges: [{path, start_line?, end_line?}]. path may be a glob — each glob " +
-					"expands to matched files sharing the same range. Max 10 entries, max 20 total files.",
-				Items: nil,
+				Type:        typeArray,
+				Description: "Per-file ranges: [{path, start_line?, end_line?}]. path may glob. Max 10 entries, 20 files.",
+				Items:       nil,
 			},
 			"lines": {
 				Type:        typeInteger,
-				Description: "Lines to read per file (mode 1 head / mode 3). Default 60, max 200.",
+				Description: "Lines to read per file (head / mode 3). Default 60, max 200.",
 				Items:       nil,
 			},
-			"start": {Type: typeInteger, Description: "First line to read, 1-based (mode 1 range).", Items: nil},
+			"start": {Type: typeInteger, Description: "First line to read, 1-based (range).", Items: nil},
 			"end": {
 				Type:        typeInteger,
-				Description: "Last line to read, inclusive (mode 1 range).",
+				Description: "Last line to read, inclusive (range).",
 				Items:       nil,
 			},
 			"tail": {
 				Type:        typeInteger,
-				Description: "Read last N lines (mode 1). Mutually exclusive with start/end/lines.",
+				Description: "Read last N lines. Exclusive with start/end/lines.",
 				Items:       nil,
 			},
 			"compact": {Type: typeBoolean, Description: "Terse output: no header, just code fences.", Items: nil},

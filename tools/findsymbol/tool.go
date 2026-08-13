@@ -37,31 +37,23 @@ var errNameRequired = errors.New("name is required")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "find_symbol",
-	Description: "Find a symbol by NAME: returns file:line + signature. Set body=true for the complete body " +
-		"in one call. Word-boundary match first, substring fallback, then typo suggestions.",
+	Name:        "find_symbol",
+	Description: "Find a symbol by NAME: returns file:line + signature. body=true for full body. Word-boundary match first, substring fallback, then typo suggestions.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name": {Type: typeString, Description: "Symbol name to find (function/method/type). " +
-				"Case-insensitive by default.", Items: nil},
-			"path": {Type: typeString, Description: "Directory to search. " +
-				"Optional — defaults to the opened project root. Supports **.", Items: nil},
-			"include": {Type: typeString, Description: "Glob to filter files. " +
-				"If omitted, auto-filtered to common source extensions.", Items: nil},
+			"name":           {Type: typeString, Description: "Symbol name to find (function/method/type). Case-insensitive by default.", Items: nil},
+			"path":           {Type: typeString, Description: "Directory to search. Defaults to project root. Supports **.", Items: nil},
+			"include":        {Type: typeString, Description: "Glob to filter files. Auto: common source extensions.", Items: nil},
 			"kind":           {Type: typeString, Description: "Filter by kind: 'func', 'type', or 'any' (default).", Items: nil},
 			"max_results":    {Type: typeInteger, Description: "Max results. Default 10, max 30.", Items: nil},
-			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive matching. Default: false.", Items: nil},
-			"compact": {Type: typeBoolean, Description: "Terse output: less whitespace, shorter headers. " +
-				"Default false.", Items: nil},
-			"names_only": {Type: typeBoolean, Description: "Return only file:line:name — cheapest mode.", Items: nil},
-			"body": {Type: typeBoolean, Description: "Return the full body of each matched symbol — " +
-				"no second look-up call needed. Default false.", Items: nil},
-			"token_budget": {Type: typeInteger, Description: "Max output chars. If exceeded, falls back to names_only, " +
-				"then truncates at line boundaries.", Items: nil},
-			"summary": {Type: typeBoolean, Description: "If body=true, truncate large bodies: first+last N lines " +
-				"with omission count.", Items: nil},
-			"summary_lines": {Type: typeInteger, Description: "Lines at start and end when summary=true. Default 5.", Items: nil},
+			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive matching. Default false.", Items: nil},
+			"compact":        {Type: typeBoolean, Description: "Terse output.", Items: nil},
+			"names_only":     {Type: typeBoolean, Description: "Only file:line:name — cheapest.", Items: nil},
+			"body":           {Type: typeBoolean, Description: "Full body of each match — no second call. Default false.", Items: nil},
+			"token_budget":   {Type: typeInteger, Description: "Max output chars. Overflow → names_only, then line-boundary truncation.", Items: nil},
+			"summary":        {Type: typeBoolean, Description: "With body=true: first+last N lines + omission count.", Items: nil},
+			"summary_lines":  {Type: typeInteger, Description: "Lines at start/end when summary=true. Default 5.", Items: nil},
 		},
 		Required:             []string{"name"},
 		AdditionalProperties: false,

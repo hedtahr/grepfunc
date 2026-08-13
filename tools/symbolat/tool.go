@@ -22,14 +22,13 @@ var (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "symbol_at",
-	Description: "Given a file path and line number, return the enclosing function or type — name, kind, " +
-		"start/end lines. Eliminates the 'what symbol is this line inside?' round-trip.",
+	Name:        "symbol_at",
+	Description: "Given file path + line number, return enclosing function or type — name, kind, start/end lines.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path": {Type: "string", Description: "File to look up. Absolute path or project-relative.", Items: nil},
-			"line": {Type: "integer", Description: "1-based line number to look up.", Items: nil},
+			"path": {Type: "string", Description: "File to look up. Absolute or project-relative.", Items: nil},
+			"line": {Type: "integer", Description: "1-based line number.", Items: nil},
 		},
 		Required:             []string{"path", "line"},
 		AdditionalProperties: false,

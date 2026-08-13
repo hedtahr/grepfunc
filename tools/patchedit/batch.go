@@ -26,33 +26,28 @@ var (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var BatchTool = server.Tool{
-	Name: "batch_patch",
-	Description: "Apply the same find-and-replace edits across ALL files matching a glob pattern in one call. " +
-		"Eliminates N sequential patch_file calls for cross-file refactors (renames, API changes). " +
-		"Returns a compact per-file summary instead of N full diffs.",
+	Name:        "batch_patch",
+	Description: "Apply the same find-and-replace edits across ALL files matching a glob in one call. Per-file summary instead of N diffs.",
 	InputSchema: server.InputSchema{
 		Type:                 jsonTypeObject,
 		AdditionalProperties: false,
 		Properties: map[string]server.Property{
 			"glob": {Type: jsonTypeString, Items: nil,
-				Description: "Glob pattern to select target files. E.g. '**/*.go', 'src/**/*.ts'. " +
-					"Matched against all files under project root."},
+				Description: "Glob to select target files. E.g. '**/*.go', 'src/**/*.ts'."},
 			propEdits: {Type: jsonTypeArray,
-				Description: "Array of {old_text, new_text, replace_all?} edit operations to apply to every matched file.",
+				Description: "Edit operations: {old_text, new_text, replace_all?}.",
 				Items: &server.Property{Type: jsonTypeObject, Items: nil,
 					Description: "Edit op: old_text, new_text, optional replace_all."}},
 			"dry_run": {Type: jsonTypeBoolean, Items: nil,
-				Description: "Preview which files would change without writing. Shows per-file match counts."},
+				Description: "Preview which files would change (per-file match counts)."},
 			"fail_fast": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true (default), skip files where any edit fails to match — " +
-					"don't partially edit them. Set false to apply successful edits even when some fail."},
+				Description: "Skip files where any edit fails to match (default true)."},
 			"skip_validate": {Type: jsonTypeBoolean, Items: nil,
 				Description: "Skip post-write validation (go vet / python ast)."},
 			"no_diff": {Type: jsonTypeBoolean, Items: nil,
-				Description: "Omit per-file diff output. Set true for summary-only (saves tokens). " +
-					"Set false to see per-file diffs."},
+				Description: "Omit per-file diff output — summary only (saves tokens)."},
 			propPath: {Type: jsonTypeString, Items: nil,
-				Description: "Root directory to search. Optional — defaults to the opened project root."},
+				Description: "Root directory to search. Defaults to project root."},
 		},
 		Required: []string{"glob", propEdits},
 	},

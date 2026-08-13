@@ -30,28 +30,19 @@ var errPathRequired = errors.New("path is required (no previous path in session)
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "file_symbols",
-	Description: "List all function and type definitions in a single file with line numbers — no bodies. " +
-		"The fastest way to orient in an unfamiliar file: one call instead of grep_func + grep_struct. " +
-		"Returns symbols sorted by line number. Use before editing to get a full map of what's in the file.",
+	Name:        "file_symbols",
+	Description: "List all function and type definitions in a file with line numbers — no bodies. Fastest way to map an unfamiliar file; use before editing.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path": {Type: typeString, Description: "File or directory to inspect. Defaults to the last file operated on, " +
-				"then the opened project root.", Items: nil},
-			"filter": {Type: typeString, Description: "Which symbols to return: 'func' (functions/methods only), " +
-				"'type' (structs/interfaces/enums only), or 'all' (default).", Items: nil},
-			"count_only": {Type: typeBoolean, Description: "If true, return only the count of symbols — no names, no lines. " +
-				"Cheapest check: 'is this file worth inspecting?'", Items: nil},
-			"compact": {Type: typeBoolean, Description: "Terse output: less whitespace, shorter headers. " +
-				"Keeps syntax highlighting. Default false.", Items: nil},
-			"pattern": {Type: typeString, Description: "Regex to filter symbols by name or signature. " +
-				"E.g. '^Handle' for exported handlers, 'Error' for error types. Case-insensitive by default.", Items: nil},
-			"case_sensitive": {Type: typeBoolean, Description: "Make pattern filter case-sensitive. Default false.", Items: nil},
-			"include": {Type: typeString, Description: "Glob to filter files. Only used when path is a directory. " +
-				"E.g. '**/*.go'. Defaults to all source files.", Items: nil},
-			"group_by_file": {Type: typeBoolean, Description: "When path is a directory, group symbols under file headers. " +
-				"Auto-enabled when path is a directory.", Items: nil},
+			"path":           {Type: typeString, Description: "File or directory to inspect. Defaults to last file operated on, then project root.", Items: nil},
+			"filter":         {Type: typeString, Description: "Which symbols: 'func', 'type', or 'all' (default).", Items: nil},
+			"count_only":     {Type: typeBoolean, Description: "If true, return only the count — cheapest check: 'worth inspecting?'.", Items: nil},
+			"compact":        {Type: typeBoolean, Description: "Terse output, keeps syntax highlighting.", Items: nil},
+			"pattern":        {Type: typeString, Description: "Regex to filter symbols by name or signature. Case-insensitive by default.", Items: nil},
+			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive pattern filter. Default false.", Items: nil},
+			"include":        {Type: typeString, Description: "Glob to filter files (directory path only). E.g. '**/*.go'.", Items: nil},
+			"group_by_file":  {Type: typeBoolean, Description: "Group symbols under file headers (auto when path is a directory).", Items: nil},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,

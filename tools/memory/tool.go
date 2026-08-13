@@ -16,70 +16,51 @@ import (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "memory",
-	Description: "Remember and recall project-specific conventions, style rules, and decisions " +
-		"across sessions. Call WITHOUT arguments to recall everything you've learned. " +
-		"Call with key and value to save something for next time. " +
-		"Automatically evicts least-recently-used facts when at capacity.\n\n" +
-		"Use this tool as your FIRST action when starting work on a project — it tells you " +
-		"what you already figured out last time. " +
-		"Save a fact whenever you discover a pattern, convention, or decision that would be " +
-		"expensive to rediscover.\n\n" +
-		"WARNING: Never store file paths, line numbers, function signatures, or code " +
-		"locations. " +
-		"Those go stale when files move or get refactored. " +
-		"Store only invariants: coding style, naming conventions, architectural decisions, " +
-		"tool preferences.",
+	Name:        "memory",
+	Description: "Remember/recall project conventions across sessions. No args → recall all. key+value → save. Auto-evicts LRU. Use FIRST at session start. NEVER store file paths, line numbers, signatures — only invariants: style, naming, architecture.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
-				Type: typeString,
-				Description: "Project directory. Optional — defaults to the opened project root. " +
-					"Memory is stored per-project at <project>/.llm/memory.json.",
-				Items: nil,
+				Type:        typeString,
+				Description: "Project directory. Defaults to project root. Memory stored at <project>/.llm/memory.json.",
+				Items:       nil,
 			},
 			"key": {
-				Type: typeString,
-				Description: "Fact key using dot notation (e.g. 'style.comments', 'conventions.naming', 'decisions.engine'). " +
-					"Avoid keys like 'file.X' or 'location.Y' — those go stale.",
-				Items: nil,
+				Type:        typeString,
+				Description: "Fact key, dot notation (e.g. 'style.comments'). Avoid 'file.X' — goes stale.",
+				Items:       nil,
 			},
 			"value": {
 				Type:        typeString,
-				Description: "Value to store. Required when saving. Omit to just recall.",
+				Description: "Value to store. Required when saving.",
 				Items:       nil,
 			},
 			"delete": {Type: typeBoolean, Description: "Set true to forget this key.", Items: nil},
 			"namespace": {
-				Type: typeString,
-				Description: "Optional namespace to scope keys (e.g. 'api', 'frontend'). " +
-					"Useful in monorepos. Keys stored as 'namespace.key', recall-all filters to namespace.",
-				Items: nil,
+				Type:        typeString,
+				Description: "Namespace to scope keys (e.g. 'api'). Keys stored as 'namespace.key'.",
+				Items:       nil,
 			},
 			"prefix": {
-				Type: typeString,
-				Description: "When recalling (no key/value), filter returned facts to keys starting with this prefix. " +
-					"E.g. 'decisions' returns only 'decisions.*' keys.",
-				Items: nil,
+				Type:        typeString,
+				Description: "When recalling: filter keys starting with this prefix (e.g. 'decisions').",
+				Items:       nil,
 			},
 			"keys_only": {
-				Type: typeBoolean,
-				Description: "If true, return only key names (no values). " +
-					"Useful for browsing what's stored before deciding what to recall.",
-				Items: nil,
+				Type:        typeBoolean,
+				Description: "Return only key names (no values).",
+				Items:       nil,
 			},
 			"search": {
-				Type: typeString,
-				Description: "Substring to search across all memory keys AND values. Case-insensitive. " +
-					"Returns matching entries. Useful when you remember a fact but forgot the key.",
-				Items: nil,
+				Type:        typeString,
+				Description: "Substring search across all keys AND values, case-insensitive.",
+				Items:       nil,
 			},
 			"merge": {
-				Type: typeBoolean,
-				Description: "If true and key exists, append value to existing value instead of overwriting. " +
-					"Deduplicates entries.",
-				Items: nil,
+				Type:        typeBoolean,
+				Description: "If key exists, append value instead of overwriting.",
+				Items:       nil,
 			},
 		},
 		Required:             []string{},

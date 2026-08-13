@@ -38,27 +38,25 @@ var errPatternRequired = errors.New("pattern is required")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_context",
-	Description: "Matching lines WITH surrounding context for non-function patterns (constants, imports, " +
-		"config values). Returns N lines before/after each match, deduplicated — replaces grep -C plus " +
-		"follow-up reads.",
+	Name:        "grep_context",
+	Description: "Matching lines WITH surrounding context for non-function patterns (constants, imports, config). N lines before/after each match, deduplicated — replaces grep -C plus follow-up reads.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"pattern": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Regex to search for",
+				Description: "Regex to search for.",
 			},
 			"path": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Directory to search. Optional — defaults to the opened project root.",
+				Description: "Directory to search. Defaults to project root.",
 			},
 			"include": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob filter. E.g. **/*.go. Defaults to all source files.",
+				Description: "Glob filter. E.g. **/*.go. Default: all source files.",
 			},
 			"context_lines": {
 				Type:        schemaInteger,
@@ -83,32 +81,32 @@ var Tool = server.Tool{
 			"compact": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Terse output: less whitespace, shorter headers. Default false.",
+				Description: "Terse output.",
 			},
 			"scope": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Annotate each match with enclosing function/type name. Default false.",
+				Description: "Annotate each match with enclosing function/type name.",
 			},
 			"group_by_file": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Group results under file headers instead of one header per match.",
+				Description: "Group results under file headers.",
 			},
 			"names_only": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "If true, return only file:line — no context, no code blocks. Cheapest mode.",
+				Description: "Only file:line — cheapest.",
 			},
 			"token_budget": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Max output chars. If exceeded, falls back to file:line only, then truncates at line boundaries.",
+				Description: "Max output chars. Overflow → file:line only, then truncate.",
 			},
 			"count_only": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Return match counts per file only — no content. Zero content tokens.",
+				Description: "Match counts per file only — zero content tokens.",
 			},
 		},
 		AdditionalProperties: false,

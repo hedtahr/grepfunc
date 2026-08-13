@@ -41,29 +41,26 @@ var errPatternRequired = errors.New("pattern is required")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_func",
-	Description: "Function/method search with brace-aware bodies. body=true returns full bodies; " +
-		"default returns signature + location. Set symbol=<name> to search inside one symbol. " +
-		"For plain-text search use grep instead.",
+	Name:        "grep_func",
+	Description: "Function/method search with brace-aware bodies. body=true returns full bodies; default returns signature + location. symbol=<name> searches inside one symbol. Plain-text: use grep.",
 	InputSchema: server.InputSchema{
 		Type:                 "object",
 		AdditionalProperties: false,
 		Properties: map[string]server.Property{
 			schemaPattern: {
-				Type:  schemaString,
-				Items: nil,
-				Description: "Regex against function names or code. Matches anywhere inside a function's lines, " +
-					"not just the signature.",
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Regex against function names or code. Matches anywhere inside a function, not just the signature.",
 			},
 			schemaPath: {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Directory to search. Optional — defaults to the opened project root.",
+				Description: "Directory to search. Defaults to project root.",
 			},
 			schemaInclude: {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob to filter files. Supports ** recursion. If omitted, auto-filtered to common source extensions.",
+				Description: "Glob to filter files. Supports **. Auto: common source extensions.",
 			},
 			"max_results": {
 				Type:        schemaInteger,
@@ -73,78 +70,77 @@ var Tool = server.Tool{
 			"offset": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Starting position for paginated results (0-based).",
+				Description: "Pagination offset (0-based).",
 			},
 			schemaBody: {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Include full function body in output. Default: false (signature + location only).",
+				Description: "Include full function body. Default false (signature + location only).",
 			},
 			"case_sensitive": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Case-sensitive regex. Default: false (case-insensitive).",
+				Description: "Case-sensitive regex. Default false.",
 			},
 			"summary": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "If body=true, show first+last N lines with omission count. Reduces token cost for large handlers.",
+				Description: "With body=true: first+last N lines + omission count.",
 			},
 			"summary_lines": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Lines to show at start and end when summary=true. Default 5.",
+				Description: "Lines at start/end when summary=true. Default 5.",
 			},
 			"names_only": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Return only file:line:name — cheapest mode (~20x fewer tokens). For table-of-contents scans.",
+				Description: "Only file:line:name — cheapest (~20x fewer tokens).",
 			},
 			"include_types": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Also return type definitions. Combines grep_func + grep_struct in one call.",
+				Description: "Also return type definitions (grep_func + grep_struct in one call).",
 			},
 			"sig_lines": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Signature lines when body=false. Default 1; use 2-3 for multi-line signatures.",
+				Description: "Signature lines when body=false. Default 1; 2-3 for multi-line.",
 			},
 			"compact": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Terse output: less whitespace, shorter headers. Keeps syntax highlighting. Default false.",
+				Description: "Terse output, keeps syntax highlighting.",
 			},
 			"receiver": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Filter to methods on this receiver type (e.g. 'Server' → func (s *Server) Method).",
+				Description: "Only methods on this receiver type (e.g. 'Server').",
 			},
 			"group_by_file": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Group results under file headers instead of a flat list.",
+				Description: "Group results under file headers.",
 			},
 			"token_budget": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Max output chars. If exceeded, falls back to names_only, then truncates at line boundaries.",
+				Description: "Max output chars. Overflow → names_only, then line-boundary truncation.",
 			},
 			"exclude_pattern": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Regex to exclude matching results. Filters on body and name.",
+				Description: "Regex to exclude matching results (body and name).",
 			},
 			"symbol": {
-				Type:  schemaString,
-				Items: nil,
-				Description: "Search INSIDE the named symbol's body instead of listing functions. ~5x cheaper than " +
-					"body=true for targeted searches.",
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Search INSIDE this symbol body (~5x cheaper than body=true).",
 			},
 			"context_lines": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Lines of context around each match when symbol is set. Default 2, max 8.",
+				Description: "Context lines around each match when symbol is set. Default 2, max 8.",
 			},
 		},
 		Required: []string{schemaPattern},

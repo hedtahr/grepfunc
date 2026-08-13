@@ -33,35 +33,23 @@ var errNameRequired = errors.New("name is required")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_refs",
-	Description: "Use when you need every reference to a symbol: call sites, type usages, assignments, and arguments. " +
-		"Filters declarations, imports, and comments automatically — native grep floods " +
-		"results with the declaration itself and doc-comment mentions. " +
-		"Set calls_only=true for invocation lines only (absorbs find_callers); " +
-		"add receiver=<name> to narrow to one object's method calls.",
+	Name:        "grep_refs",
+	Description: "Every reference to a symbol: call sites, type usages, assignments, arguments. Auto-filters declarations, imports, comments. calls_only=true for invocation lines only; receiver=<name> narrows to one object calls.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name": {Type: typeString, Description: "Symbol name to find references to. " +
-				"Matched as a whole word (word-boundary).", Items: nil},
-			"path": {Type: typeString, Description: "Directory to search. " +
-				"Optional — defaults to the opened project root.", Items: nil},
-			"include": {Type: typeString, Description: "Glob filter. Defaults to all source files.", Items: nil},
-			"context_lines": {Type: typeInteger, Description: "Lines before/after each reference. " +
-				"Default 2, max 8.", Items: nil},
+			"name":           {Type: typeString, Description: "Symbol name to find references to (word-boundary match).", Items: nil},
+			"path":           {Type: typeString, Description: "Directory to search. Defaults to project root.", Items: nil},
+			"include":        {Type: typeString, Description: "Glob filter. Default: all source files.", Items: nil},
+			"context_lines":  {Type: typeInteger, Description: "Lines before/after each reference. Default 2, max 8.", Items: nil},
 			"case_sensitive": {Type: typeBoolean, Description: "Default false.", Items: nil},
 			"max_results":    {Type: typeInteger, Description: "Max references. Default 20, max 50.", Items: nil},
 			"offset":         {Type: typeInteger, Description: "Pagination offset (0-based).", Items: nil},
-			"compact":        {Type: typeBoolean, Description: "Terse output. Default false.", Items: nil},
-			"names_only": {Type: typeBoolean, Description: "Return only file:line — no context. " +
-				"Cheapest mode.", Items: nil},
-			"scope": {Type: typeBoolean, Description: "Annotate each reference with the " +
-				"enclosing function/method name.", Items: nil},
-			"calls_only": {Type: typeBoolean, Description: "If true, return only invocation lines " +
-				"(call syntax: Name( or x.Name(), excluding type usages, assignments, and declarations). " +
-				"Absorbs the old find_callers.", Items: nil},
-			"receiver": {Type: typeString, Description: "With calls_only=true, only match calls on " +
-				"this receiver/variable name. E.g. 's' finds 's.MethodName('.", Items: nil},
+			"compact":        {Type: typeBoolean, Description: "Terse output.", Items: nil},
+			"names_only":     {Type: typeBoolean, Description: "Only file:line — cheapest.", Items: nil},
+			"scope":          {Type: typeBoolean, Description: "Annotate each reference with enclosing function/method name.", Items: nil},
+			"calls_only":     {Type: typeBoolean, Description: "Only invocation lines: Name( or x.Name().", Items: nil},
+			"receiver":       {Type: typeString, Description: "With calls_only: only calls on this receiver/variable (e.g. 's' → s.MethodName().", Items: nil},
 		},
 		Required:             []string{"name"},
 		AdditionalProperties: false,

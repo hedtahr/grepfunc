@@ -23,27 +23,24 @@ const (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "patch_file",
-	Description: "Edit a file by replacing old_text with new_text (fuzzy matching) or inserting text at a line. " +
-		"Runs formatter BEFORE the edit when applicable. Prefer edit mode for surgical changes.",
+	Name:        "patch_file",
+	Description: "Edit a file by replacing old_text with new_text (fuzzy matching) or inserting text at a line. Runs formatter BEFORE edit.",
 	InputSchema: server.InputSchema{
 		Type:                 jsonTypeObject,
 		AdditionalProperties: false,
 		Properties: map[string]server.Property{
-			propPath: {Type: jsonTypeString, Items: nil, Description: "File to edit. Absolute path or project-relative."},
-			propEdits: {Type: jsonTypeArray, Description: "Array of edit operations (find-and-replace). " +
-				"Each item: {old_text, new_text, index?, replace_all?}.",
+			propPath: {Type: jsonTypeString, Items: nil, Description: "File to edit. Absolute or project-relative."},
+			propEdits: {Type: jsonTypeArray, Description: "Edit operations: {old_text, new_text, index?, replace_all?}.",
 				Items: &server.Property{Type: jsonTypeObject, Items: nil,
-					Description: "An edit with old_text, new_text, optional index, " +
-						"and optional replace_all (replaces all occurrences instead of erroring on AMBIGUOUS_MATCH)."}},
+					Description: "Edit op: old_text, new_text, optional index, optional replace_all (replaces all occurrences)."}},
 			"inserts": {Type: jsonTypeArray,
-				Description: "Array of insert operations. Each inserts text before a specific line.",
+				Description: "Insert operations. Each inserts text before a specific line.",
 				Items: &server.Property{Type: jsonTypeObject, Items: nil,
 					Description: "{line (1-based), text, index?}."}},
 			"dry_run": {Type: jsonTypeBoolean, Items: nil,
-				Description: "If true, preview changes without writing the file."},
+				Description: "Preview changes without writing."},
 			"fail_fast": {Type: jsonTypeBoolean, Items: nil,
-				Description: "All-or-nothing: if any edit fails to match, write nothing."},
+				Description: "All-or-nothing: if any edit fails, write nothing."},
 
 			"diff_context": {Type: jsonTypeInteger, Items: nil,
 				Description: "Diff hunk context lines. Default 3, max 10."},
@@ -52,17 +49,17 @@ var Tool = server.Tool{
 			"skip_validate": {Type: jsonTypeBoolean, Items: nil,
 				Description: "Skip post-write validation (go vet / python ast)."},
 			"append_text": {Type: jsonTypeString, Items: nil,
-				Description: "Text to append at end of file (auto-newline if missing)."},
+				Description: "Text to append at end of file (auto-newline)."},
 			"no_diff": {Type: jsonTypeBoolean, Items: nil,
-				Description: "Omit the diff block; show only the summary line."},
+				Description: "Omit the diff block; summary line only."},
 			"echo_lines": {Type: jsonTypeInteger, Items: nil,
-				Description: "Context lines around first edit point in result echo. Default 3; 0 disables."},
+				Description: "Context lines around first edit point in echo. Default 3; 0 disables."},
 			"terse": {Type: jsonTypeBoolean, Items: nil,
 				Description: "Minimal output: '[OK] N/N edits applied' or '[FAIL] errors'."},
 			"insert_file": {Type: jsonTypeString, Items: nil,
 				Description: "File whose contents are inserted at insert_line."},
 			"insert_line": {Type: jsonTypeInteger, Items: nil,
-				Description: "Line number to insert insert_file contents before. Default 1."},
+				Description: "Line to insert insert_file contents before. Default 1."},
 		},
 		Required: []string{propPath},
 	},

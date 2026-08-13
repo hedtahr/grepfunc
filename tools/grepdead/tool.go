@@ -31,32 +31,30 @@ const refChunkSize = 30
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_dead",
-	Description: "Use when you need to identify dead code — declared symbols with zero references " +
-		"outside their declaring file. Two-pass analysis (find declarations, then verify references) " +
-		"that native grep can't do in a single query. Can be slow on large codebases; cap with max_symbols.",
+	Name:        "grep_dead",
+	Description: "Identify dead code — declared symbols with zero references outside their declaring file. Two-pass: find declarations, then verify references. Cap with max_symbols.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Root directory to search. Optional — defaults to the opened project root.",
+				Description: "Root directory to search. Defaults to project root.",
 			},
 			"include": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob to filter files for both declaration and reference search. E.g. '**/*.go'.",
+				Description: "Glob filter for declaration and reference search. E.g. '**/*.go'.",
 			},
 			"kind": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Symbol kind to check: 'func', 'type', or 'all' (default).",
+				Description: "Symbol kind: 'func', 'type', or 'all' (default).",
 			},
 			"min_lines": {
 				Type:        "integer",
 				Items:       nil,
-				Description: "Skip symbols with body shorter than this many lines. Default 2 (skips trivial one-liners).",
+				Description: "Skip symbols with bodies shorter than this many lines. Default 2.",
 			},
 			"max_symbols": {
 				Type:        "integer",
@@ -66,7 +64,7 @@ var Tool = server.Tool{
 			"compact": {
 				Type:        "boolean",
 				Items:       nil,
-				Description: "Terse output. Default false.",
+				Description: "Terse output.",
 			},
 		},
 		AdditionalProperties: false,

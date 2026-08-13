@@ -25,51 +25,45 @@ const (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_imports",
-	Description: "Use when you need import relationships: which files import a module, or what one " +
-		"specific file imports. Language-aware parsing (Go, Python, JS/TS, Rust) — native grep " +
-		"can't reliably match import syntax across languages. Returns structured file→symbols " +
-		"output in one call.",
+	Name:        "grep_imports",
+	Description: "Import relationships: which files import a module, or what one file imports. Language-aware (Go, Python, JS/TS, Rust). Returns structured file→symbols.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"module": {
-				Type:  schemaString,
-				Items: nil,
-				Description: "Module/package name or path substring to find. E.g. 'grepfunc' matches any " +
-					"import path containing 'grepfunc'. Omit when using 'file' to list all imports.",
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Module/package name or path substring. E.g. 'grepfunc'. Omit with 'file' to list all imports.",
 			},
 			"path": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Directory to search. Optional — defaults to the opened project root.",
+				Description: "Directory to search. Defaults to project root.",
 			},
 			"include": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files when omitted.",
+				Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files.",
 			},
 			"file": {
-				Type:  schemaString,
-				Items: nil,
-				Description: "Specific file to inspect. Absolute path or project-relative. If set, lists ALL " +
-					"imports in this file (ignores module/path).",
+				Type:        schemaString,
+				Items:       nil,
+				Description: "Specific file to inspect — lists ALL imports (ignores module/path).",
 			},
 			"compact": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Terse output. Default false.",
+				Description: "Terse output.",
 			},
 			"body": {
-				Type:  schemaBoolean,
-				Items: nil,
-				Description: "If true, show matched import lines inline (code block per file). Saves a follow-up " +
-					"grep_context call.",
+				Type:        schemaBoolean,
+				Items:       nil,
+				Description: "Show matched import lines inline (code block per file).",
 			},
 			"names_only": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "If true, return only file:import_path — no code blocks. Cheapest mode.",
+				Description: "Only file:import_path — cheapest.",
 			},
 		},
 		AdditionalProperties: false,

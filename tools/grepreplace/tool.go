@@ -37,10 +37,8 @@ var errPatternRequired = errors.New("pattern is required")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_replace",
-	Description: "Use for regex find-and-replace across many files in one call. Safer than sed -i for cross-file " +
-		"refactors: returns a per-file change summary and supports dry_run preview. Go regex syntax with capture " +
-		"groups ($1, $2). For single-file one-off edits, native sed is fine.",
+	Name:        "grep_replace",
+	Description: "Regex find-and-replace across many files in one call. Per-file change summary + dry_run preview. Go regex with capture groups ($1, $2).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -48,11 +46,11 @@ var Tool = server.Tool{
 			keyReplacement: {Type: typeString, Description: "Replacement string. Supports $1 $2 capture groups.", Items: nil},
 			"path": {
 				Type:        typeString,
-				Description: "Absolute root directory to search. Defaults to project root.",
+				Description: "Absolute root directory. Defaults to project root.",
 				Items:       nil,
 			},
 			keyInclude:       {Type: typeString, Description: "Glob filter (e.g. **/*.go). Default: *.", Items: nil},
-			"dry_run":        {Type: typeBoolean, Description: "Preview without writing. Default false.", Items: nil},
+			"dry_run":        {Type: typeBoolean, Description: "Preview without writing.", Items: nil},
 			"case_sensitive": {Type: typeBoolean, Description: "Default false (case-insensitive).", Items: nil},
 			"max_files":      {Type: typeInteger, Description: "Max files to process. Default 50, max 200.", Items: nil},
 		},

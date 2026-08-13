@@ -25,20 +25,19 @@ var (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "delete_symbol",
-	Description: "Delete a named symbol (function, method, struct, interface, enum, class) from a file. " +
-		"Removes the full body including all nested scopes.",
+	Name:        "delete_symbol",
+	Description: "Delete a named symbol (function/method/struct/interface/enum/class) from a file, including nested scopes.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"name": {
 				Type:        "string",
-				Description: "Name of the symbol to delete. Exact match (case-insensitive).",
+				Description: "Symbol to delete. Exact match, case-insensitive.",
 				Items:       nil,
 			},
 			"path": {
 				Type:        "string",
-				Description: "File containing the symbol. Absolute path or project-relative.",
+				Description: "File containing the symbol. Absolute or project-relative.",
 				Items:       nil,
 			},
 			"dry_run": {Type: "boolean", Description: "Preview the file after deletion without writing.", Items: nil},

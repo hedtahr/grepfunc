@@ -19,24 +19,19 @@ import (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "tool_stats",
-	Description: "Show usage telemetry across ALL projects: how often each tool was called " +
-		"(call count, error rate, avg duration) and which registered tools were never called. " +
-		"Read-only audit of model tool adoption — the feedback loop for deciding which tools to keep, " +
-		"merge, or drop. Recorded globally to the user cache dir (grepfunc/toolstats.log). " +
-		"Pass path to filter to one project.",
+	Name:        "tool_stats",
+	Description: "Usage telemetry across ALL projects: call count, error rate, avg duration per tool, never-called tools. Read-only audit. Logged to user cache dir (grepfunc/toolstats.log).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
-				Type: "string",
-				Description: "Project directory to filter telemetry to. " +
-					"Optional — omit for a global view across all projects.",
-				Items: nil,
+				Type:        "string",
+				Description: "Filter telemetry to one project directory. Omit for global.",
+				Items:       nil,
 			},
 			"compact": {
 				Type:        "boolean",
-				Description: "Terse output: one line per tool, no header. Default false.",
+				Description: "Terse output: one line per tool.",
 				Items:       nil,
 			},
 		},

@@ -25,30 +25,29 @@ const (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "git_context",
-	Description: "Compact git orientation: branch, recent commits, working-tree status, and optionally " +
-		"diff --stat. Use at session start to understand where the project is.",
+	Name:        "git_context",
+	Description: "Compact git orientation: branch, recent commits, status, optional diff --stat. Use at session start.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        typeString,
-				Description: "Project directory. Optional — defaults to the opened project root.",
+				Description: "Project directory. Defaults to project root.",
 				Items:       nil,
 			},
 			"commits": {
 				Type:        typeInteger,
-				Description: "Number of recent commits to show. Default 5.",
+				Description: "Recent commits to show. Default 5.",
 				Items:       nil,
 			},
 			"diff_stat": {
 				Type:        typeBoolean,
-				Description: "Include git diff --stat (unstaged changes). Default true.",
+				Description: "Include git diff --stat. Default true.",
 				Items:       nil,
 			},
 			"compact": {
 				Type:        typeBoolean,
-				Description: "Terse output. Default false.",
+				Description: "Terse output.",
 				Items:       nil,
 			},
 		},
@@ -154,26 +153,24 @@ func renderContext(req args, branch, log, status, diffStat string) string {
 //
 //nolint:gochecknoglobals // MCP tool definition
 var GitTool = server.Tool{
-	Name: "git",
-	Description: "Git operations in one tool. mode=context (default): branch, recent commits, status, diff --stat. " +
-		"mode=diff: line-level changes for a file or the whole tree. mode=restore: undo local edits to a file.",
+	Name:        "git",
+	Description: "Git operations in one tool. mode=context (default): branch, commits, status, diff --stat. mode=diff: line-level changes. mode=restore: undo local edits to a file.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"mode": {
 				Type:        typeString,
-				Description: "'context' (default), 'diff', or 'restore'.",
+				Description: "Mode: 'context' (default), 'diff', or 'restore'.",
 				Items:       nil,
 			},
 			"path": {
-				Type: typeString,
-				Description: "Context mode: project directory. Diff mode: specific file to diff " +
-					"(omit for all changed files). Optional — defaults to the opened project root.",
-				Items: nil,
+				Type:        typeString,
+				Description: "Context mode: project dir. Diff mode: specific file to diff. Restore mode: file to restore. Absolute or project-relative.",
+				Items:       nil,
 			},
 			"commits": {
 				Type:        typeInteger,
-				Description: "Context mode: number of recent commits to show. Default 5.",
+				Description: "Context mode: recent commits to show. Default 5.",
 				Items:       nil,
 			},
 			"diff_stat": {
@@ -193,22 +190,22 @@ var GitTool = server.Tool{
 			},
 			"context_lines": {
 				Type:        typeInteger,
-				Description: "Diff mode: lines of context around changes. Default 3, max 10.",
+				Description: "Diff mode: context lines around changes. Default 3, max 10.",
 				Items:       nil,
 			},
 			"stat_only": {
 				Type:        typeBoolean,
-				Description: "Diff mode: show only --stat summary (no line diff).",
+				Description: "Diff mode: only --stat summary (no line diff).",
 				Items:       nil,
 			},
 			"base": {
 				Type:        typeString,
-				Description: "Diff mode: base commit or branch to diff against (e.g. 'HEAD~1', 'main'). Default: working tree.",
+				Description: "Diff mode: base commit/branch to diff against (e.g. 'HEAD~1', 'main'). Default: working tree.",
 				Items:       nil,
 			},
 			"file": {
 				Type:        typeString,
-				Description: "Restore mode: file to restore (git restore). Absolute path or project-relative.",
+				Description: "Restore mode: file to restore (git restore).",
 				Items:       nil,
 			},
 		},

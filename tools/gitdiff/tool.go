@@ -28,15 +28,14 @@ var errGitDiff = errors.New("git diff failed")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "git_diff",
-	Description: "Show git diff output for a file or all changes. Shows actual line-level changes, avoiding the " +
-		"need to read whole files. Use staged=true for staged changes, base='HEAD~1' to compare commits.",
+	Name:        "git_diff",
+	Description: "Show git diff output for a file or all changes. staged=true for staged; base='HEAD~1' to compare commits.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        "string",
-				Description: "Specific file to diff. Absolute path or project-relative. Omit for all changed files.",
+				Description: "Specific file to diff. Omit for all changed files.",
 				Items:       nil,
 			},
 			"staged": {
@@ -46,17 +45,17 @@ var Tool = server.Tool{
 			},
 			"context_lines": {
 				Type:        "integer",
-				Description: "Lines of context around changes. Default 3, max 10.",
+				Description: "Context lines around changes. Default 3, max 10.",
 				Items:       nil,
 			},
 			"stat_only": {
 				Type:        "boolean",
-				Description: "Show only --stat summary (no line diff).",
+				Description: "Only --stat summary, no line diff.",
 				Items:       nil,
 			},
 			"base": {
 				Type:        "string",
-				Description: "Base commit or branch to diff against, e.g. 'HEAD~1', 'main'. Default: working tree diff.",
+				Description: "Base commit/branch to diff against (e.g. 'HEAD~1', 'main'). Default: working tree.",
 				Items:       nil,
 			},
 		},

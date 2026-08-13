@@ -33,27 +33,25 @@ var (
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "move_symbol",
-	Description: "Move a named symbol (function, method, struct, interface, enum, class) from a source file to a " +
-		"destination file. Removes the symbol from src and inserts it into dst at the specified line (or appends if " +
-		"no line given).",
+	Name:        "move_symbol",
+	Description: "Move a named symbol (function/method/struct/interface/enum/class) from source file to destination file, at the given line (or append).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name": {Type: typeString, Description: "Name of the symbol to move. Exact match.", Items: nil},
+			"name": {Type: typeString, Description: "Symbol to move. Exact match.", Items: nil},
 			"src": {
 				Type:        typeString,
-				Description: "Source file containing the symbol. Absolute path or project-relative.",
+				Description: "Source file containing the symbol. Absolute or project-relative.",
 				Items:       nil,
 			},
 			"dst": {
 				Type:        typeString,
-				Description: "Destination file. Absolute path or project-relative.",
+				Description: "Destination file. Absolute or project-relative.",
 				Items:       nil,
 			},
 			"line": {
 				Type:        "integer",
-				Description: "Line number in dst to insert before. If omitted, appends to end of dst.",
+				Description: "Line in dst to insert before. Omit to append at end.",
 				Items:       nil,
 			},
 			"dry_run": {Type: "boolean", Description: "Preview changes without writing files.", Items: nil},

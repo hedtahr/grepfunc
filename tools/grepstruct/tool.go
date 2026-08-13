@@ -35,35 +35,23 @@ var errPatternRequired = errors.New("pattern is required")
 //
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
-	Name: "grep_struct",
-	Description: "Use when you need data models — struct/class/interface/enum/type definitions to read or edit. " +
-		"Returns full type bodies with line numbers, brace-aware — native grep only returns matching lines. " +
-		"body=true returns full bodies; default returns name + location. For plain-text search use grep instead.",
+	Name:        "grep_struct",
+	Description: "Data models — struct/class/interface/enum/type definitions. Full type bodies with line numbers, brace-aware. body=true returns full bodies; default name + location.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			keyPattern: {Type: typeString, Description: "Regex pattern to match against type names or body contents. " +
-				"Matches anywhere inside the definition. Examples: 'User', 'Handler', 'interface', 'class.*Service'.", Items: nil},
-			keyPath: {Type: typeString, Description: "Directory to search. " +
-				"Optional — defaults to the opened project root.", Items: nil},
-			keyInclude: {Type: typeString, Description: "Glob to filter files. Supports ** for recursive matching. " +
-				"Examples: '**/*.go', '**/*.ts', '**/*.java'. If omitted, auto-filtered to common source extensions.", Items: nil},
-			"max_results": {Type: typeInteger, Description: "Max definitions to return. Default 15, max 50.", Items: nil},
-			"offset":      {Type: typeInteger, Description: "Starting position for paginated results (0-based).", Items: nil},
-			keyBody: {Type: typeBoolean, Description: "Include full body in output. " +
-				"Default: false (name + location only).", Items: nil},
-			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive regex. " +
-				"Default: false (case-insensitive).", Items: nil},
-			"summary": {Type: typeBoolean, Description: "If true and body=true, truncate large definitions: " +
-				"shows first+last N lines with omission count. Reduces token cost for large definitions.", Items: nil},
-			"summary_lines": {Type: typeInteger, Description: "Lines to show at start and end " +
-				"when summary=true. Default 5.", Items: nil},
-			"names_only": {Type: typeBoolean, Description: "If true, return only file:line:name — no body, no signature. " +
-				"Cheapest mode (~20x fewer tokens than body=true). For table-of-contents scans.", Items: nil},
-			"compact": {Type: typeBoolean, Description: "Terse output: less whitespace, shorter headers. " +
-				"Keeps syntax highlighting. Default false.", Items: nil},
-			"exclude_pattern": {Type: typeString, Description: "Regex to exclude matching results. " +
-				"Filters on body and name.", Items: nil},
+			keyPattern:        {Type: typeString, Description: "Regex against type names or body contents. Examples: 'User', 'Handler', 'interface'.", Items: nil},
+			keyPath:           {Type: typeString, Description: "Directory to search. Defaults to project root.", Items: nil},
+			keyInclude:        {Type: typeString, Description: "Glob to filter files, ** recursive. Auto: common source extensions.", Items: nil},
+			"max_results":     {Type: typeInteger, Description: "Max definitions. Default 15, max 50.", Items: nil},
+			"offset":          {Type: typeInteger, Description: "Pagination offset (0-based).", Items: nil},
+			keyBody:           {Type: typeBoolean, Description: "Include full body. Default false (name + location only).", Items: nil},
+			"case_sensitive":  {Type: typeBoolean, Description: "Case-sensitive regex. Default false.", Items: nil},
+			"summary":         {Type: typeBoolean, Description: "With body=true: first+last N lines + omission count.", Items: nil},
+			"summary_lines":   {Type: typeInteger, Description: "Lines at start/end when summary=true. Default 5.", Items: nil},
+			"names_only":      {Type: typeBoolean, Description: "Only file:line:name — cheapest (~20x fewer tokens).", Items: nil},
+			"compact":         {Type: typeBoolean, Description: "Terse output.", Items: nil},
+			"exclude_pattern": {Type: typeString, Description: "Regex to exclude matching results (body and name).", Items: nil},
 		},
 		Required:             []string{keyPattern},
 		AdditionalProperties: false,
