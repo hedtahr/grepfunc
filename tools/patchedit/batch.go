@@ -84,6 +84,10 @@ func BatchHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		root = server.ResolvePath(args.Path)
 	}
 
+	if err := server.CheckBounds(root); err != nil {
+		return nil, err
+	}
+
 	matchedPaths, err := collectMatchingPaths(root, args.Glob)
 	if err != nil {
 		return nil, err

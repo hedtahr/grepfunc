@@ -153,9 +153,14 @@ func TestResolvePathLastDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Absolute path: saves lastDir, returns as-is
+	// 1. Absolute path: saves lastDir, returns symlink-resolved realpath
+	realSub, err := filepath.EvalSymlinks(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	got := ResolvePath(filepath.Join(sub, "a.go"))
-	if got != filepath.Join(sub, "a.go") {
+	if got != filepath.Join(realSub, "a.go") {
 		t.Fatalf("abs: got %q", got)
 	}
 
@@ -244,14 +249,20 @@ func TestResolvePathNoMarkerReorient(t *testing.T) {
 
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "x.go")
+	realTmp, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	realPath := filepath.Join(realTmp, "x.go")
 
 	// Unlocked: adopts the file's dir WITHOUT locking.
 	ProjectRoot = testProjectRoot
 	projectRootLocked = false
 
 	got := ResolvePath(filePath)
-	if got != filePath {
-		t.Fatalf("ResolvePath = %q, want %q", got, filePath)
+	if got != realPath {
+		t.Fatalf("ResolvePath = %q, want %q", got, realPath)
 	}
 
 	if ProjectRoot != tmp {
@@ -267,8 +278,8 @@ func TestResolvePathNoMarkerReorient(t *testing.T) {
 	projectRootLocked = true
 
 	got = ResolvePath(filePath)
-	if got != filePath {
-		t.Fatalf("ResolvePath (locked) = %q, want %q", got, filePath)
+	if got != realPath {
+		t.Fatalf("ResolvePath (locked) = %q, want %q", got, realPath)
 	}
 
 	if ProjectRoot != testProjectRoot {
@@ -291,6 +302,12 @@ func TestResolvePathReorientWithMarker(t *testing.T) {
 	}
 
 	filePath := filepath.Join(proj, "main.go")
+	realProj, err := filepath.EvalSymlinks(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	realPath := filepath.Join(realProj, "main.go")
 
 	// Locked: a path in another project must NOT re-pin the root (sandbox
 	// escape hardening). The path still resolves, but ProjectRoot stays.
@@ -298,8 +315,8 @@ func TestResolvePathReorientWithMarker(t *testing.T) {
 	projectRootLocked = true
 
 	got := ResolvePath(filePath)
-	if got != filePath {
-		t.Fatalf("ResolvePath = %q, want %q", got, filePath)
+	if got != realPath {
+		t.Fatalf("ResolvePath = %q, want %q", got, realPath)
 	}
 
 	if ProjectRoot != testProjectRoot {
@@ -315,8 +332,8 @@ func TestResolvePathReorientWithMarker(t *testing.T) {
 	projectRootLocked = false
 
 	got = ResolvePath(filePath)
-	if got != filePath {
-		t.Fatalf("ResolvePath (unlocked) = %q, want %q", got, filePath)
+	if got != realPath {
+		t.Fatalf("ResolvePath (unlocked) = %q, want %q", got, realPath)
 	}
 
 	if ProjectRoot != proj {
@@ -500,5 +517,101 @@ func TestBudgetResultTruncates(t *testing.T) {
 
 	if !strings.Contains(got, "Output trimmed to fit token_budget=20") {
 		t.Errorf("BudgetResult missing notice, got %q", got)
+	}
+}
+
+func TestCheckBoundsSymlinkEscape(t *testing.T) {
+	origRoot := ProjectRoot
+	origLocked := projectRootLocked
+
+	defer func() { ProjectRoot = origRoot; projectRootLocked = origLocked }()
+
+	outside := t.TempDir()
+	root := t.TempDir()
+
+	// #nosec G304 -- t.TempDir test fixtures
+	err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("S3CRET"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// In-project symlink pointing outside the sandbox (CWE-59).
+	err = os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "innocent.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ProjectRoot = root
+	projectRootLocked = true
+
+	if err := CheckBounds(filepath.Join(root, "innocent.txt")); err == nil {
+		t.Error("in-project symlink to outside file must be denied")
+	}
+
+	if err := CheckBounds(filepath.Join(root, "real.go")); err != nil {
+		t.Errorf("plain in-root path should be allowed: %v", err)
+	}
+
+	if err := CheckBounds(filepath.Join(outside, "secret.txt")); err == nil {
+		t.Error("absolute outside path must be denied")
+	}
+
+	// New file under a symlinked dir escaping the sandbox must be denied.
+	err = os.Symlink(filepath.Join(outside, "nonexistent-subdir"), filepath.Join(root, "evildir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckBounds(filepath.Join(root, "evildir", "newfile.go")); err == nil {
+		t.Error("write through an escaping symlink dir must be denied")
+	}
+
+	// Dangling symlink dir: target may not exist yet but could be created.
+	err = os.Symlink(filepath.Join(outside, "later"), filepath.Join(root, "dangling"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckBounds(filepath.Join(root, "dangling", "x.go")); err == nil {
+		t.Error("write through a dangling symlink dir must fail closed")
+	}
+
+	// Nonexistent new file in a real in-root dir stays allowed.
+	if err := CheckBounds(filepath.Join(root, "sub", "new.go")); err != nil {
+		t.Errorf("new file under root should be allowed: %v", err)
+	}
+}
+
+func TestResolvePathSymlinkResolution(t *testing.T) {
+	origRoot := ProjectRoot
+	origLocked := projectRootLocked
+
+	defer func() { ProjectRoot = origRoot; projectRootLocked = origLocked }()
+
+	outside := t.TempDir()
+	root := t.TempDir()
+
+	// #nosec G304 -- t.TempDir test fixtures
+	err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("x"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	realTarget, err := filepath.EvalSymlinks(filepath.Join(outside, "target.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(filepath.Join(outside, "target.txt"), filepath.Join(root, "link.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ProjectRoot = root
+	projectRootLocked = true
+
+	got := ResolvePath(filepath.Join(root, "link.txt"))
+	if got != realTarget {
+		t.Fatalf("ResolvePath(link) = %q, want real target %q", got, realTarget)
 	}
 }

@@ -193,6 +193,10 @@ func handleSearchMode(arg fileArgs) (*server.ToolCallResult, error) {
 		arg.Path = server.ResolvePath(arg.Path)
 	}
 
+	if err := server.CheckBounds(arg.Path); err != nil {
+		return nil, err
+	}
+
 	if arg.Include == "" {
 		arg.Include = "*"
 	}

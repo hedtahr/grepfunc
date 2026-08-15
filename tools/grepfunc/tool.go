@@ -42,7 +42,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_func",
-	Description: "Function/method search, brace-aware bodies. body=true → full bodies; default signature+location.",
+	Description: "Function/method search, brace-aware bodies. body=true → full bodies; default signature+location. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type:                 "object",
 		AdditionalProperties: false,
@@ -194,6 +194,10 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	applyDefaults(&arg)
+
+	if err := server.CheckBounds(arg.Path); err != nil {
+		return nil, err
+	}
 
 	pattern, err := CompilePattern(arg.Pattern, arg.CaseSensitive)
 	if err != nil {

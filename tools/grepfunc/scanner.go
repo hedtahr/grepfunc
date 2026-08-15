@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/hedtahr/grepfunc/server"
 )
@@ -18,6 +20,13 @@ import (
 const (
 	searchBothFactor = 2
 	initialStackCap  = 16
+
+	// searchWorkerCap bounds the parallel search pool. ripgrep's benchmarks
+	// show 4-8 workers is the Amdahl sweet spot; more adds contention.
+	searchWorkerCap = 4
+	// binarySniffLen is how many leading bytes are checked for NUL bytes to
+	// classify a file as binary (ripgrep's heuristic: fast, extension-agnostic).
+	binarySniffLen = 64 * 1024
 
 	stateCode         = 0 // code context
 	stateDoubleQuote  = 1
@@ -43,58 +52,159 @@ func CompilePattern(pattern string, caseSensitive bool) (*regexp.Regexp, error) 
 
 // Search walks the directory tree, finds matching files, and extracts blocks.
 // sigFn detects whether a line starts a code block (function, struct, class, etc).
+// Traversal is parallelized over a small bounded worker pool (ripgrep-style:
+// Amdahl's law makes 4-8 workers optimal; more mostly adds contention).
+// Results are sorted by (file, line) so output stays deterministic.
 func Search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
-	var (
-		results []FuncMatch
-		walkErr error
-	)
+	workers := min(searchWorkerCap, max(1, runtime.GOMAXPROCS(0)))
 
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			walkErr = err
+	type fileJob struct {
+		path  string
+		entry fs.DirEntry
+	}
 
-			return err
-		}
+	jobs := make(chan fileJob, workers*4)
+	results := make(chan []FuncMatch, workers*2)
+	errCh := make(chan error, workers)
+	stop := make(chan struct{})
 
-		if entry.IsDir() {
-			base := entry.Name()
-			if isSkippableDir(base) {
+	var wg sync.WaitGroup
+
+	for range workers {
+		wg.Go(func() {
+			for j := range jobs {
+				funcs, err := searchFile(root, j.path, glob, j.entry, pattern, limit, sigFn)
+				if err != nil {
+					errCh <- err
+
+					return
+				}
+
+				if len(funcs) == 0 {
+					continue
+				}
+
+				for i := range funcs {
+					funcs[i].File = j.path
+				}
+
+				results <- funcs
+			}
+		})
+	}
+
+	walkDone := make(chan struct{})
+	var walkErr error
+
+	gi := loadGitignore(root)
+
+	go func() {
+		defer close(jobs)
+		defer close(walkDone)
+
+		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				if walkErr == nil {
+					walkErr = err
+				}
+
 				return filepath.SkipDir
 			}
 
-			return nil
+			if entry.IsDir() {
+				base := entry.Name()
+				if isSkippableDir(base) {
+					return filepath.SkipDir
+				}
+
+				if rel, relErr := filepath.Rel(root, path); relErr == nil && gi.ignores(rel, true) {
+					return filepath.SkipDir
+				}
+
+				return nil
+			}
+
+			if rel, relErr := filepath.Rel(root, path); relErr == nil && gi.ignores(rel, false) {
+				return nil
+			}
+
+			select {
+			case jobs <- fileJob{path: path, entry: entry}:
+				return nil
+
+			case <-stop:
+				return filepath.SkipAll
+			}
+		})
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var (
+		out      []FuncMatch
+		firstErr error
+	)
+	var stopOnce sync.Once
+
+	for funcs := range results {
+		out = append(out, funcs...)
+
+		if len(out) >= limit {
+			stopOnce.Do(func() { close(stop) })
+		}
+	}
+
+	// Workers send at most one error each before exiting, so a single
+	// non-blocking read after results close captures the first error.
+	select {
+	case err := <-errCh:
+		firstErr = err
+
+	default:
+	}
+
+	<-walkDone
+
+	if walkErr != nil && firstErr == nil {
+		firstErr = walkErr
+	}
+
+	if firstErr != nil && len(out) == 0 {
+		return nil, fmt.Errorf("walk %s: %w", root, firstErr)
+	}
+
+	if firstErr != nil {
+		return out, fmt.Errorf("walk %s: %w", root, firstErr)
+	}
+
+	slices.SortFunc(out, func(a, b FuncMatch) int {
+		if c := strings.Compare(a.File, b.File); c != 0 {
+			return c
 		}
 
-		remaining := limit - len(results)
-		if remaining <= 0 {
-			return filepath.SkipAll
+		if a.Line < b.Line {
+			return -1
 		}
 
-		funcs, err := searchFile(root, path, glob, entry, pattern, remaining, sigFn)
-		if err != nil {
-			walkErr = err
-
-			return err
+		if a.Line > b.Line {
+			return 1
 		}
 
-		for i := range funcs {
-			funcs[i].File = path
-		}
-
-		results = append(results, funcs...)
-
-		return nil
+		return 0
 	})
 
-	if walkErr != nil && len(results) == 0 {
-		return nil, fmt.Errorf("walk %s: %w", root, walkErr)
+	if limit < 0 {
+		limit = 0
 	}
 
-	if err != nil {
-		return results, fmt.Errorf("walk %s: %w", root, err)
+	if len(out) > limit {
+		out = out[:limit]
 	}
 
-	return results, nil
+	return out, nil
 }
 
 // isSkippableDir reports whether a directory should be excluded from searches.
@@ -134,7 +244,18 @@ func searchFile(root, path, glob string, entry fs.DirEntry, pattern *regexp.Rege
 		return nil, nil
 	}
 
-	return extractBlocks(path, pattern, remaining, sigFn)
+	// #nosec G304 -- path is bounds-checked by the server
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	// NUL-byte sniff (ripgrep's binary heuristic): catches binaries with
+	// misleading extensions that the extension list misses.
+	if bytes.IndexByte(data[:min(len(data), binarySniffLen)], 0) >= 0 {
+		return nil, nil
+	}
+
+	return extractBlocksData(path, data, pattern, remaining, sigFn)
 }
 
 // SearchBoth finds funcs and types in a single walk.
@@ -277,6 +398,12 @@ func extractBlocks(filePath string, pattern *regexp.Regexp, limit int, sigFn fun
 		return nil, fmt.Errorf("read %s: %w", filePath, err)
 	}
 
+	return extractBlocksData(filePath, data, pattern, limit, sigFn)
+}
+
+// extractBlocksData scans an already-read file's contents for blocks matching
+// pattern, avoiding a second read when the caller sniffed the file first.
+func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
 	lines := toLines(data)
 	if len(lines) == 0 {
 		return nil, nil

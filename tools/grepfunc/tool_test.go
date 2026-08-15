@@ -932,3 +932,93 @@ func TestRenderPagedBudgetSigFallback(t *testing.T) {
 		t.Errorf("missing budget hint in %q", out)
 	}
 }
+
+// ==========================================================================
+// Binary sniffing + parallel Search tests
+// ==========================================================================
+
+func TestSearchSkipsNulBinary(t *testing.T) {
+	dir := t.TempDir()
+
+	// Text file: must be found.
+	// #nosec G304 -- t.TempDir fixture
+	err := os.WriteFile(filepath.Join(dir, "ok.go"), []byte("package t\nfunc Good() {}\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Binary-looking content with a source extension: NUL sniff must skip it.
+	bin := append([]byte("package t\nfunc Fake() {}\n"), 0, 1, 2, 3)
+	// #nosec G304 -- t.TempDir fixture
+	err = os.WriteFile(filepath.Join(dir, "fake.go"), bin, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Binary with a misleading extension (no known binary ext): sniff skips it.
+	// #nosec G304 -- t.TempDir fixture
+	err = os.WriteFile(filepath.Join(dir, "blob.txt"), []byte{1, 0, 2, 0, 3, 0}, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pat := regexp.MustCompile(`func `)
+
+	funcs, err := Search(dir, "*", pat, 10, IsFuncSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(funcs) != 1 {
+		t.Fatalf("got %d funcs, want 1 (only ok.go)", len(funcs))
+	}
+
+	if funcs[0].Name != "Good" {
+		t.Errorf("funcs[0].Name = %q, want Good", funcs[0].Name)
+	}
+}
+
+func TestSearchSortedAndLimited(t *testing.T) {
+	dir := t.TempDir()
+
+	// #nosec G304 -- t.TempDir fixture
+	err := os.WriteFile(filepath.Join(dir, "z.go"), []byte("package t\nfunc Zulu() {}\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// #nosec G304 -- t.TempDir fixture
+	err = os.WriteFile(filepath.Join(dir, "a.go"), []byte("package t\nfunc Alpha() {}\nfunc Beta() {}\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pat := regexp.MustCompile(`func `)
+
+	funcs, err := Search(dir, "*", pat, 10, IsFuncSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"a.go:Alpha", "a.go:Beta", "z.go:Zulu"}
+	if len(funcs) != len(want) {
+		t.Fatalf("got %d funcs, want %d", len(funcs), len(want))
+	}
+
+	for i, w := range want {
+		got := filepath.Base(funcs[i].File) + ":" + funcs[i].Name
+		if got != w {
+			t.Errorf("funcs[%d] = %s, want %s", i, got, w)
+		}
+	}
+
+	// Limit: early stop must still respect the cap.
+	limited, err := Search(dir, "*", pat, 1, IsFuncSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(limited) != 1 {
+		t.Fatalf("limited Search got %d funcs, want 1", len(limited))
+	}
+}

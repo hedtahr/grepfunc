@@ -34,7 +34,7 @@ var errNameRequired = errors.New("name is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_refs",
-	Description: "Every reference to a symbol: call sites, type usages, assignments. calls_only=true → invocation lines only.",
+	Description: "Every reference to a symbol: call sites, type usages, assignments. calls_only=true → invocation lines only. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -85,6 +85,10 @@ type args struct {
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	arg, err := parseArgs(raw)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := server.CheckBounds(arg.Path); err != nil {
 		return nil, err
 	}
 

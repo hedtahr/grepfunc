@@ -104,6 +104,10 @@ func parseArgs(raw json.RawMessage) (args, error) {
 		arg.Path = server.ResolvePath(arg.Path)
 	}
 
+	if err := server.CheckBounds(arg.Path); err != nil {
+		return arg, fmt.Errorf("check bounds: %w", err)
+	}
+
 	if arg.Depth <= 0 {
 		arg.Depth = defaultDepth
 	}

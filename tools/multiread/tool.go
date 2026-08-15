@@ -21,7 +21,7 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "multi_read",
-	Description: "Read file contents. path = file or glob (* ? [). Multi-file ranges: use reads array. Returns total line count.",
+	Description: "Read file contents. path = file or glob (* ? [). Multi-file ranges: use reads array. Returns total line count. Sandboxed to project root; symlinks escaping the root are denied.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

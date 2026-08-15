@@ -38,7 +38,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_replace",
-	Description: "Regex find-and-replace across many files. Per-file summary + dry_run preview. Go regex ($1, $2 groups).",
+	Description: "Regex find-and-replace across many files. Per-file summary + dry_run preview. Go regex ($1, $2 groups). Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -98,6 +98,10 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	root, glob, maxFiles := resolveScope(req)
+	if err := server.CheckBounds(root); err != nil {
+		return nil, err
+	}
+
 	walker := &replaceWalker{
 		re:          pattern,
 		glob:        glob,

@@ -32,7 +32,7 @@ const refChunkSize = 30
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_dead",
-	Description: "Dead code: declared symbols with zero references outside their file.",
+	Description: "Dead code: declared symbols with zero references outside their file. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -109,6 +109,10 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	arg.Path = server.ResolvePath(arg.Path)
+	if err := server.CheckBounds(arg.Path); err != nil {
+		return nil, err
+	}
+
 	if arg.Kind == "" {
 		arg.Kind = kindAll
 	}

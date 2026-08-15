@@ -705,21 +705,98 @@ func CheckBanned(path string) error {
 	return nil
 }
 
+// errDanglingSymlink marks a symlink whose target does not exist yet.
+// It must fail closed: the target may be created outside the sandbox later.
+var errDanglingSymlink = errors.New("dangling symlink")
+
 // CheckBounds returns an error if p is outside ProjectRoot.
 // No-op when root is not yet locked (unknown project root).
+//
+// Both p and the root are resolved through symlinks before the prefix check:
+// a lexical-only check is bypassable by an in-project symlink pointing
+// outside (CWE-59; cf. vm2 CVE-2026-43998, openclaw GHSA-9p3r-hh9g-5cmg).
+// Unresolvable paths fall back to the lexical check (an escape requires an
+// existing symlink, which always resolves); dangling-symlink ancestors fail
+// closed.
 func CheckBounds(path string) error {
 	if !projectRootLocked || ProjectRoot == "" {
 		return nil
 	}
 
-	clean := filepath.Clean(path) + string(filepath.Separator)
+	realPath, err := resolveSymlinks(path)
+	lexical := false
+	if err != nil {
+		if errors.Is(err, errDanglingSymlink) {
+			return fmt.Errorf("%w: %q (%v)", errOutsideProject, path, err)
+		}
 
-	root := filepath.Clean(ProjectRoot) + string(filepath.Separator)
+		// Unresolvable path (nonexistent components) cannot reach outside:
+		// fall back to the lexical check so new files keep working.
+		realPath = filepath.Clean(path)
+		lexical = true
+	}
+
+	clean := filepath.Clean(realPath) + string(filepath.Separator)
+
+	root := ProjectRoot
+	if !lexical {
+		root = realProjectRoot()
+	}
+
+	root = filepath.Clean(root) + string(filepath.Separator)
 	if !strings.HasPrefix(clean, root) {
 		return fmt.Errorf("%w: %q", errOutsideProject, path)
 	}
 
 	return nil
+}
+
+// resolveSymlinks resolves path through symlinks to its real location.
+// For paths that do not exist yet (e.g. a file to create), the deepest
+// existing ancestor is resolved and the remainder is appended lexically.
+// A dangling-symlink ancestor fails closed: its target may not exist yet
+// but become creatable outside the sandbox later. Other unresolvable paths
+// return an error so the caller can fall back to a lexical check.
+func resolveSymlinks(path string) (string, error) {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real, nil
+	}
+
+	dir := filepath.Dir(path)
+
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err == nil {
+		return filepath.Join(realDir, filepath.Base(path)), nil
+	}
+
+	if fi, lerr := os.Lstat(dir); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: %q", errDanglingSymlink, dir)
+	}
+
+	return "", err
+}
+
+// realProjectRoot returns ProjectRoot dereferenced through symlinks,
+// memoized per root value. ProjectRoot is write-once after locking, so the
+// cache stays correct for the lifetime of a locked session.
+var (
+	realRootMemo     string
+	realRootMemoRoot string
+)
+
+func realProjectRoot() string {
+	if realRootMemoRoot == ProjectRoot {
+		return realRootMemo
+	}
+
+	realRootMemoRoot = ProjectRoot
+	realRootMemo = ProjectRoot
+
+	if real, err := filepath.EvalSymlinks(ProjectRoot); err == nil {
+		realRootMemo = real
+	}
+
+	return realRootMemo
 }
 
 var projectRootLocked bool //nolint:gochecknoglobals // deliberate cross-tool server state
@@ -737,6 +814,9 @@ func LockProjectRoot() {
 // ResolvePath resolves a tool path argument relative to the project root.
 // Accepts: absolute paths, paths relative to project root, and paths prefixed
 // with the project root's base name (Zed convention: "myproject/src/foo.go").
+// Absolute paths are dereferenced through symlinks so walkers and readers
+// never operate through an in-root symlink pointing outside the sandbox
+// (CWE-59). Nonexistent paths fall back to their resolved existing ancestor.
 func ResolvePath(path string) string {
 	if path == "" || path == "." {
 		return ProjectRoot
@@ -745,6 +825,10 @@ func ResolvePath(path string) string {
 	if filepath.IsAbs(path) {
 		lastDir = filepath.Dir(path)
 		reorientRoot(path)
+
+		if real, err := resolveSymlinks(path); err == nil {
+			return real
+		}
 
 		return path
 	}

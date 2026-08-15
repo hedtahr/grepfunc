@@ -94,6 +94,10 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	req.Path = server.ResolvePath(req.Path)
+	if err := server.CheckBounds(req.Path); err != nil {
+		return nil, err
+	}
+
 	if req.Include == "" {
 		req.Include = "*"
 	}

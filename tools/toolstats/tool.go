@@ -77,6 +77,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		filter = server.ProjectRoot
 	}
 
+	if input.Path != "" {
+		if err := server.CheckBounds(filter); err != nil {
+			return nil, err
+		}
+	}
+
 	path := server.StatsLogPath()
 
 	_, statErr := os.Stat(path)
