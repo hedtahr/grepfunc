@@ -20,6 +20,7 @@ const (
 	filterAll   = "all"
 	maxSymbols  = 500
 	typeString  = "string"
+	typeInteger = "integer"
 	typeBoolean = "boolean"
 	typeText    = "text"
 )
@@ -43,6 +44,7 @@ var Tool = server.Tool{
 			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive pattern filter. Default false.", Items: nil},
 			"include":        {Type: typeString, Description: "Glob to filter files (directory path only). E.g. '**/*.go'.", Items: nil},
 			"group_by_file":  {Type: typeBoolean, Description: "Group symbols under file headers (auto when path is a directory).", Items: nil},
+			"token_budget":   {Type: typeInteger, Description: "Max output chars. Overflow → line-boundary truncation.", Items: nil},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,
@@ -58,6 +60,7 @@ type args struct {
 	CaseSensitive bool   `json:"case_sensitive"`
 	Include       string `json:"include"`
 	GroupByFile   bool   `json:"group_by_file"`
+	TokenBudget   int    `json:"token_budget"`
 }
 
 type sym struct {
@@ -109,10 +112,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		renderFlat(&buf, arg, syms, rel, ext)
 	}
 
-	return &server.ToolCallResult{
+	result := &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: typeText, Text: buf.String()}},
 		IsError: false,
-	}, nil
+	}
+
+	return server.BudgetResult(result, arg.TokenBudget), nil
 }
 
 func parseArgs(raw json.RawMessage) (args, error) {

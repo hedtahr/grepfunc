@@ -42,7 +42,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_func",
-	Description: "Function/method search with brace-aware bodies. body=true returns full bodies; default returns signature + location. symbol=<name> searches inside one symbol. Plain-text: use grep.",
+	Description: "Function/method search with brace-aware bodies. body=true → full bodies; default signature + location. Plain-text: use grep.",
 	InputSchema: server.InputSchema{
 		Type:                 "object",
 		AdditionalProperties: false,

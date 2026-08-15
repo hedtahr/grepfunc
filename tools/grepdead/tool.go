@@ -32,7 +32,7 @@ const refChunkSize = 30
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_dead",
-	Description: "Identify dead code — declared symbols with zero references outside their declaring file. Two-pass: find declarations, then verify references. Cap with max_symbols.",
+	Description: "Identify dead code — declared symbols with zero references outside their file. Cap with max_symbols.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

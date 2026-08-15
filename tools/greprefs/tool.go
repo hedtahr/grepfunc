@@ -34,7 +34,7 @@ var errNameRequired = errors.New("name is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_refs",
-	Description: "Every reference to a symbol: call sites, type usages, assignments, arguments. Auto-filters declarations, imports, comments. calls_only=true for invocation lines only; receiver=<name> narrows to one object calls.",
+	Description: "Every reference to a symbol: call sites, type usages, assignments. calls_only=true → invocation lines only.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -50,6 +50,7 @@ var Tool = server.Tool{
 			"scope":          {Type: typeBoolean, Description: "Annotate each reference with enclosing function/method name.", Items: nil},
 			"calls_only":     {Type: typeBoolean, Description: "Only invocation lines: Name( or x.Name().", Items: nil},
 			"receiver":       {Type: typeString, Description: "With calls_only: only calls on this receiver/variable (e.g. 's' → s.MethodName().", Items: nil},
+			"token_budget":   {Type: typeInteger, Description: "Max output chars. Overflow → line-boundary truncation.", Items: nil},
 		},
 		Required:             []string{"name"},
 		AdditionalProperties: false,
@@ -77,6 +78,7 @@ type args struct {
 	Scope         bool   `json:"scope"`
 	CallsOnly     bool   `json:"calls_only"`
 	Receiver      string `json:"receiver"`
+	TokenBudget   int    `json:"token_budget"`
 }
 
 // Handle processes a grep_refs tool call and returns the result.
@@ -96,10 +98,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	output := renderRefs(arg, walker.sites, walker.total, walker.scannedAll)
 
-	return &server.ToolCallResult{
+	result := &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 		IsError: false,
-	}, nil
+	}
+
+	return server.BudgetResult(result, arg.TokenBudget), nil
 }
 
 func parseArgs(raw json.RawMessage) (args, error) {

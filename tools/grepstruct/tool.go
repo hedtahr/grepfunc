@@ -36,7 +36,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_struct",
-	Description: "Data models — struct/class/interface/enum/type definitions. Full type bodies with line numbers, brace-aware. body=true returns full bodies; default name + location.",
+	Description: "Data models — struct/class/interface/enum definitions. body=true → full body; default name + location.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -52,6 +52,7 @@ var Tool = server.Tool{
 			"names_only":      {Type: typeBoolean, Description: "Only file:line:name — cheapest (~20x fewer tokens).", Items: nil},
 			"compact":         {Type: typeBoolean, Description: "Terse output.", Items: nil},
 			"exclude_pattern": {Type: typeString, Description: "Regex to exclude matching results (body and name).", Items: nil},
+			"token_budget":    {Type: typeInteger, Description: "Max output chars. Overflow → line-boundary truncation.", Items: nil},
 		},
 		Required:             []string{keyPattern},
 		AdditionalProperties: false,
@@ -71,6 +72,7 @@ type args struct {
 	NamesOnly      bool   `json:"names_only"`
 	Compact        bool   `json:"compact"`
 	ExcludePattern string `json:"exclude_pattern"`
+	TokenBudget    int    `json:"token_budget"`
 }
 
 // Handle processes a grep_struct tool call and returns the result.
@@ -109,10 +111,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	output := renderResults(arg, page, total, start, end)
 
-	return &server.ToolCallResult{
+	result := &server.ToolCallResult{
 		Content: []server.ToolCallContent{{Type: "text", Text: output}},
 		IsError: false,
-	}, nil
+	}
+
+	return server.BudgetResult(result, arg.TokenBudget), nil
 }
 
 func renderResults(arg args, page []grepfunc.FuncMatch, total, start, end int) string {

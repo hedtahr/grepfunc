@@ -39,7 +39,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_context",
-	Description: "Matching lines WITH surrounding context for non-function patterns (constants, imports, config). N lines before/after each match, deduplicated — replaces grep -C plus follow-up reads.",
+	Description: "Matching lines WITH surrounding context for non-function patterns (constants, imports, config). N lines before/after, deduplicated — replaces grep -C.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

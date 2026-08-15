@@ -17,6 +17,7 @@ import (
 // Schema keys and content types shared by the tool definition and callers.
 const (
 	schemaString  = "string"
+	schemaInteger = "integer"
 	schemaBoolean = "boolean"
 	schemaText    = "text"
 )
@@ -26,7 +27,7 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_imports",
-	Description: "Import relationships: which files import a module, or what one file imports. Language-aware (Go, Python, JS/TS, Rust). Returns structured file→symbols.",
+	Description: "Import relationships: which files import a module, or what one file imports. Language-aware (Go, Python, JS/TS, Rust).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -64,6 +65,11 @@ var Tool = server.Tool{
 				Type:        schemaBoolean,
 				Items:       nil,
 				Description: "Only file:import_path — cheapest.",
+			},
+			"token_budget": {
+				Type:        schemaInteger,
+				Items:       nil,
+				Description: "Max output chars. Overflow → line-boundary truncation.",
 			},
 		},
 		AdditionalProperties: false,
@@ -103,13 +109,14 @@ var (
 
 // fileArgs are the parsed arguments of a grep_imports call.
 type fileArgs struct {
-	Module    string `json:"module"`
-	Path      string `json:"path"`
-	Include   string `json:"include"`
-	File      string `json:"file"`
-	Compact   bool   `json:"compact"`
-	Body      bool   `json:"body"`
-	NamesOnly bool   `json:"names_only"`
+	Module      string `json:"module"`
+	Path        string `json:"path"`
+	Include     string `json:"include"`
+	File        string `json:"file"`
+	Compact     bool   `json:"compact"`
+	Body        bool   `json:"body"`
+	NamesOnly   bool   `json:"names_only"`
+	TokenBudget int    `json:"token_budget"`
 }
 
 // Handle processes a grep_imports tool call.
@@ -129,10 +136,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	if arg.File != "" {
-		return handleFileMode(arg)
+		result, err := handleFileMode(arg)
+		return server.BudgetResult(result, arg.TokenBudget), err
 	}
 
-	return handleSearchMode(arg)
+	result, err := handleSearchMode(arg)
+	return server.BudgetResult(result, arg.TokenBudget), err
 }
 
 // handleFileMode lists all imports in a single file.

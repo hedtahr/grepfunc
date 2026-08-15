@@ -154,7 +154,7 @@ func renderContext(req args, branch, log, status, diffStat string) string {
 //nolint:gochecknoglobals // MCP tool definition
 var GitTool = server.Tool{
 	Name:        "git",
-	Description: "Git operations in one tool. mode=context (default): branch, commits, status, diff --stat. mode=diff: line-level changes. mode=restore: undo local edits to a file.",
+	Description: "Git operations in one tool: mode=context (branch, commits, status, diff --stat), mode=diff (line changes), mode=restore (undo edits).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

@@ -399,7 +399,8 @@ func (s *Server) handleToolsCall(req Request) *Response {
 	for _, te := range s.tools {
 		if te.Tool.Name == params.Name {
 			result, err := te.Handler(args)
-			s.stats.record(s.tools, params.Name, err != nil, time.Since(start), len(args))
+			isErr := err != nil || (result != nil && result.IsError)
+			s.stats.record(s.tools, params.Name, isErr, time.Since(start), len(args), resultBytes(result, err))
 
 			if err != nil {
 				return &Response{JSONRPC: jsonrpcVersion, ID: req.ID, Result: &ToolCallResult{
@@ -412,17 +413,36 @@ func (s *Server) handleToolsCall(req Request) *Response {
 		}
 	}
 
-	s.stats.record(s.tools, params.Name, true, time.Since(start), len(args))
+	msg := "unknown tool: " + params.Name
+	s.stats.record(s.tools, params.Name, true, time.Since(start), len(args), len(msg))
 
 	return &Response{
 		JSONRPC: jsonrpcVersion,
 		ID:      req.ID,
 		Result: &ToolCallResult{
-			Content: []ToolCallContent{{Type: "text", Text: "unknown tool: " + params.Name}},
+			Content: []ToolCallContent{{Type: "text", Text: msg}},
 			IsError: true,
 		},
 		Error: nil,
 	}
+}
+
+// resultBytes approximates the output size sent back to the client.
+func resultBytes(result *ToolCallResult, err error) int {
+	if result == nil {
+		if err != nil {
+			return len(err.Error())
+		}
+
+		return 0
+	}
+
+	n := 0
+	for _, c := range result.Content {
+		n += len(c.Text)
+	}
+
+	return n
 }
 
 // applyCwdOverride re-orients ProjectRoot from a per-call cwd until a real root exists.
@@ -659,7 +679,24 @@ func TruncateToBudget(s string, budget int) string {
 		return s[:budget]
 	}
 
-	return s[:cut+1]
+	return s[:cut]
+}
+
+// BudgetResult trims the first text content of a result to budget chars, noting the trim.
+func BudgetResult(result *ToolCallResult, budget int) *ToolCallResult {
+	if result == nil || budget <= 0 || len(result.Content) == 0 {
+		return result
+	}
+
+	text := result.Content[0].Text
+	if len(text) <= budget {
+		return result
+	}
+
+	result.Content[0].Text = TruncateToBudget(text, budget) +
+		fmt.Sprintf("\n[Output trimmed to fit token_budget=%d.]\n", budget)
+
+	return result
 }
 
 // reorientRoot re-pins ProjectRoot when an absolute path lies outside it.

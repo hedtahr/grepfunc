@@ -52,6 +52,11 @@ var Tool = server.Tool{
 				Items:       nil,
 			},
 			"compact": {Type: typeBoolean, Description: "Terse output: no header, just code fences.", Items: nil},
+			"token_budget": {
+				Type:        typeInteger,
+				Description: "Max output chars. Overflow → line-boundary truncation.",
+				Items:       nil,
+			},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,
@@ -93,13 +98,14 @@ type readEntry struct {
 }
 
 type args struct {
-	Path    string      `json:"path"`
-	Reads   []readEntry `json:"reads"`
-	Lines   int         `json:"lines"`
-	Start   int         `json:"start"`
-	End     int         `json:"end"`
-	Tail    int         `json:"tail"`
-	Compact bool        `json:"compact"`
+	Path        string      `json:"path"`
+	Reads       []readEntry `json:"reads"`
+	Lines       int         `json:"lines"`
+	Start       int         `json:"start"`
+	End         int         `json:"end"`
+	Tail        int         `json:"tail"`
+	Compact     bool        `json:"compact"`
+	TokenBudget int         `json:"token_budget"`
 }
 
 // Handle serves the multi_read MCP tool.
@@ -113,11 +119,14 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	switch {
 	case len(input.Reads) > 0:
-		return handleMulti(input)
+		result, err := handleMulti(input)
+		return server.BudgetResult(result, input.TokenBudget), err
 	case isGlob(input.Path):
-		return handleGlob(input)
+		result, err := handleGlob(input)
+		return server.BudgetResult(result, input.TokenBudget), err
 	default:
-		return handleSingle(input)
+		result, err := handleSingle(input)
+		return server.BudgetResult(result, input.TokenBudget), err
 	}
 }
 

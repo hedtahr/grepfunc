@@ -21,7 +21,7 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "find_related",
-	Description: "Find files RELATED to a file — tests, mocks, sibling implementations, config. Finds *_test.*, *.test.*, *_mock.*, mock_*, *.spec.*, same-named files in nearby dirs.",
+	Description: "Find files RELATED to a file: tests (*_test.*, *.spec.*), mocks (mock_*, *_mock.*), siblings, same-named files nearby.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -38,6 +38,11 @@ var Tool = server.Tool{
 			"with_symbols": {
 				Type:        "boolean",
 				Description: "Include top-level func/type names found in each related file.",
+				Items:       nil,
+			},
+			"token_budget": {
+				Type:        "integer",
+				Description: "Max output chars. Overflow → line-boundary truncation.",
 				Items:       nil,
 			},
 		},
@@ -67,6 +72,7 @@ type args struct {
 	Path        string `json:"path"`
 	Compact     bool   `json:"compact"`
 	WithSymbols bool   `json:"with_symbols"`
+	TokenBudget int    `json:"token_budget"`
 }
 
 // Handle serves the find_related MCP tool.
@@ -101,7 +107,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	server.SetLastPath(input.Path)
 	related := findRelated(input.Path)
 
-	return textResult(renderResults(related, input)), nil
+	return server.BudgetResult(textResult(renderResults(related, input)), input.TokenBudget), nil
 }
 
 // renderResults formats the related-file list, or a no-results notice.

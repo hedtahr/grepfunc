@@ -11,7 +11,7 @@ import (
 )
 
 // toolStats records per-call usage telemetry to the user cache dir, global across all projects.
-// Append-only, one line per tool call: ts \t project \t tool \t ok|err \t durMs \t argBytes.
+// Append-only, one line per tool call: ts \t project \t tool \t ok|err \t durMs \t argBytes \t outBytes.
 type toolStats struct {
 	mu      sync.Mutex
 	written map[string]bool // stats-file paths already initialized with header
@@ -21,7 +21,7 @@ func newToolStats() *toolStats {
 	return &toolStats{mu: sync.Mutex{}, written: map[string]bool{}}
 }
 
-func (ts *toolStats) record(tools []ToolEntry, tool string, isErr bool, dur time.Duration, argBytes int) {
+func (ts *toolStats) record(tools []ToolEntry, tool string, isErr bool, dur time.Duration, argBytes, outBytes int) {
 	dir := statsDir()
 	path := filepath.Join(dir, "toolstats.log")
 
@@ -63,8 +63,8 @@ func (ts *toolStats) record(tools []ToolEntry, tool string, isErr bool, dur time
 		project = "."
 	}
 
-	_, _ = fmt.Fprintf(logFile, "%s\t%s\t%s\t%s\t%d\t%d\n",
-		time.Now().UTC().Format(time.RFC3339), project, tool, status, dur.Milliseconds(), argBytes)
+	_, _ = fmt.Fprintf(logFile, "%s\t%s\t%s\t%s\t%d\t%d\t%d\n",
+		time.Now().UTC().Format(time.RFC3339), project, tool, status, dur.Milliseconds(), argBytes, outBytes)
 }
 
 func statsDir() string {

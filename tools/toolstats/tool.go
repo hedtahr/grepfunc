@@ -20,7 +20,7 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "tool_stats",
-	Description: "Usage telemetry across ALL projects: call count, error rate, avg duration per tool, never-called tools. Read-only audit. Logged to user cache dir (grepfunc/toolstats.log).",
+	Description: "Usage telemetry across ALL projects: call count, error rate, avg duration, avg output bytes per tool, never-called tools.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -50,6 +50,7 @@ type toolAgg struct {
 	calls    int
 	errs     int
 	totalDur time.Duration
+	totalOut int
 	first    time.Time
 	last     time.Time
 }
@@ -174,7 +175,7 @@ func renderBody(
 ) {
 	if compact {
 		for _, agg := range sorted {
-			fmt.Fprintf(buf, "%s: %d calls, %d err, %dms avg\n", agg.name, agg.calls, agg.errs, avgMs(agg))
+			fmt.Fprintf(buf, "%s: %d calls, %d err, %dms avg, %dB avg out\n", agg.name, agg.calls, agg.errs, avgMs(agg), avgOut(agg))
 		}
 
 		return
@@ -191,8 +192,8 @@ func renderBody(
 		fmt.Fprintf(buf, "Range: %s → %s\n", first.Format(time.RFC3339), last.Format(time.RFC3339))
 	}
 
-	fmt.Fprintf(buf, "\n%-20s %6s %6s %6s %9s\n",
-		"tool", "calls", "errors", "err%", "avg(ms)")
+	fmt.Fprintf(buf, "\n%-20s %6s %6s %6s %9s %10s\n",
+		"tool", "calls", "errors", "err%", "avg(ms)", "avgOut(B)")
 
 	for _, agg := range sorted {
 		rate := 0.0
@@ -200,7 +201,7 @@ func renderBody(
 			rate = percent * float64(agg.errs) / float64(agg.calls)
 		}
 
-		fmt.Fprintf(buf, "%-20s %6d %6d %5.1f%% %9d\n", agg.name, agg.calls, agg.errs, rate, avgMs(agg))
+		fmt.Fprintf(buf, "%-20s %6d %6d %5.1f%% %9d %10d\n", agg.name, agg.calls, agg.errs, rate, avgMs(agg), avgOut(agg))
 	}
 }
 
@@ -239,6 +240,14 @@ func avgMs(agg *toolAgg) int {
 	return int(agg.totalDur.Milliseconds() / int64(agg.calls))
 }
 
+func avgOut(agg *toolAgg) int {
+	if agg.calls == 0 {
+		return 0
+	}
+
+	return agg.totalOut / agg.calls
+}
+
 // parseLog reads the telemetry log, filtering lines to the given project when set.
 func parseLog(path, filter string) (map[string]*toolAgg, []string, map[string]int, error) {
 	// #nosec G304 -- paths bounds-checked by server
@@ -267,7 +276,7 @@ func parseLog(path, filter string) (map[string]*toolAgg, []string, map[string]in
 			continue
 		}
 
-		tool, isErr, durMs, when, project, ok := parseLogLine(line, filter)
+		tool, isErr, durMs, outBytes, when, project, ok := parseLogLine(line, filter)
 		if !ok {
 			continue
 		}
@@ -276,11 +285,11 @@ func parseLog(path, filter string) (map[string]*toolAgg, []string, map[string]in
 
 		agg := aggs[tool]
 		if agg == nil {
-			agg = &toolAgg{name: tool, first: when, last: when, calls: 0, errs: 0, totalDur: 0}
+			agg = &toolAgg{name: tool, first: when, last: when, calls: 0, errs: 0, totalDur: 0, totalOut: 0}
 			aggs[tool] = agg
 		}
 
-		agg.observe(when, isErr, durMs)
+		agg.observe(when, isErr, durMs, outBytes)
 	}
 
 	scanErr := scanner.Err()
@@ -292,34 +301,40 @@ func parseLog(path, filter string) (map[string]*toolAgg, []string, map[string]in
 }
 
 // parseLogLine parses one data line, or ok=false when malformed or filtered out.
-func parseLogLine(line, filter string) (string, bool, int, time.Time, string, bool) {
+func parseLogLine(line, filter string) (string, bool, int, int, time.Time, string, bool) {
 	parts := strings.Split(line, "\t")
 	if len(parts) < minLogFields {
-		return "", false, 0, time.Time{}, "", false
+		return "", false, 0, 0, time.Time{}, "", false
 	}
 
 	if !projMatch(parts[1], filter) {
-		return "", false, 0, time.Time{}, "", false
+		return "", false, 0, 0, time.Time{}, "", false
 	}
 
 	when, err := time.Parse(time.RFC3339, parts[0])
 	if err != nil {
-		return "", false, 0, time.Time{}, "", false
+		return "", false, 0, 0, time.Time{}, "", false
 	}
 
 	durMs, _ := strconv.Atoi(parts[4])
 
-	return parts[2], parts[3] == "err", durMs, when, parts[1], true
+	outBytes := 0
+	if len(parts) > 6 {
+		outBytes, _ = strconv.Atoi(parts[6])
+	}
+
+	return parts[2], parts[3] == "err", durMs, outBytes, when, parts[1], true
 }
 
 // observe folds one log line into the aggregation.
-func (agg *toolAgg) observe(when time.Time, isErr bool, durMs int) {
+func (agg *toolAgg) observe(when time.Time, isErr bool, durMs, outBytes int) {
 	agg.calls++
 	if isErr {
 		agg.errs++
 	}
 
 	agg.totalDur += time.Duration(durMs) * time.Millisecond
+	agg.totalOut += outBytes
 	if when.Before(agg.first) {
 		agg.first = when
 	}

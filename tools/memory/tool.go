@@ -17,7 +17,7 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "memory",
-	Description: "Remember/recall project conventions across sessions. No args → recall all. key+value → save. Auto-evicts LRU. Use FIRST at session start. NEVER store file paths, line numbers, signatures — only invariants: style, naming, architecture.",
+	Description: "Remember/recall project conventions across sessions. No args → recall all. key+value → save. Use FIRST at session start. Store only invariants (style, naming, architecture).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -62,6 +62,11 @@ var Tool = server.Tool{
 				Description: "If key exists, append value instead of overwriting.",
 				Items:       nil,
 			},
+			"limit": {
+				Type:        typeInteger,
+				Description: "Max entries in list output (most recent first). Overflow noted with hint.",
+				Items:       nil,
+			},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,
@@ -81,6 +86,7 @@ const (
 	keyField    = "key"
 	valueField  = "value"
 	typeString  = "string"
+	typeInteger = "integer"
 	typeBoolean = "boolean"
 	typeText    = "text"
 )
@@ -105,6 +111,7 @@ type args struct {
 	KeysOnly  bool   `json:"keys_only"`
 	Search    string `json:"search"`
 	Merge     bool   `json:"merge"`
+	Limit     int    `json:"limit"`
 }
 
 // storePath returns the memory file path for a project directory. Overridable for tests.
@@ -295,11 +302,21 @@ func handleList(mem store, input args) *server.ToolCallResult {
 		return textResult(msg)
 	}
 
+	total := len(entries)
+	if input.Limit > 0 && input.Limit < total {
+		entries = entries[:input.Limit]
+	}
+
 	if input.KeysOnly {
 		return textResult(keysOnlyText(entries))
 	}
 
-	return textResult(listText(entries, input.Namespace))
+	text := listText(entries, input.Namespace)
+	if total > len(entries) {
+		text += fmt.Sprintf("\n%d more entries — use limit or prefix/keys_only to page.", total-len(entries))
+	}
+
+	return textResult(text)
 }
 
 // filterPrefix keeps entries whose key starts with the prefix.
