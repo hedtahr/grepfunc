@@ -32,19 +32,19 @@ var errPathRequired = errors.New("path is required (no previous path in session)
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "file_symbols",
-	Description: "List all function and type definitions in a file with line numbers — no bodies. Fastest way to map an unfamiliar file; use before editing.",
+	Description: "List func/type definitions with line numbers — no bodies. Map unfamiliar files.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":           {Type: typeString, Description: "File or directory to inspect. Defaults to last file operated on, then project root.", Items: nil},
+			"path":           {Type: typeString, Description: "File or directory. Defaults to last file, then project root.", Items: nil},
 			"filter":         {Type: typeString, Description: "Which symbols: 'func', 'type', or 'all' (default).", Items: nil},
-			"count_only":     {Type: typeBoolean, Description: "If true, return only the count — cheapest check: 'worth inspecting?'.", Items: nil},
-			"compact":        {Type: typeBoolean, Description: "Terse output, keeps syntax highlighting.", Items: nil},
-			"pattern":        {Type: typeString, Description: "Regex to filter symbols by name or signature. Case-insensitive by default.", Items: nil},
-			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive pattern filter. Default false.", Items: nil},
-			"include":        {Type: typeString, Description: "Glob to filter files (directory path only). E.g. '**/*.go'.", Items: nil},
-			"group_by_file":  {Type: typeBoolean, Description: "Group symbols under file headers (auto when path is a directory).", Items: nil},
-			"token_budget":   {Type: typeInteger, Description: "Max output chars. Overflow → line-boundary truncation.", Items: nil},
+			"count_only":     {Type: typeBoolean, Description: "Return only the count — cheapest.", Items: nil},
+			"compact":        {Type: typeBoolean, Description: "Terse output.", Items: nil},
+			"pattern":        {Type: typeString, Description: "Regex filter on name/signature. Case-insensitive.", Items: nil},
+			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive. Default false.", Items: nil},
+			"include":        {Type: typeString, Description: "Glob filter (directory path only).", Items: nil},
+			"group_by_file":  {Type: typeBoolean, Description: "Group under file headers (auto for directories).", Items: nil},
+			"token_budget":   {Type: typeInteger, Description: "Max output chars; truncates at line boundaries.", Items: nil},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,
@@ -186,7 +186,7 @@ func collectSyms(arg args) []sym {
 
 func appendFuncSyms(dst []sym, funcs []grepfunc.FuncMatch) []sym {
 	for _, match := range funcs {
-		sig := util.FirstSigLine(match.Body)
+		sig := server.FirstLine(match.Body, 120)
 		dst = append(dst, sym{file: match.File, line: match.Line, endLine: match.EndLine, kind: "func", sig: sig})
 	}
 
@@ -195,7 +195,7 @@ func appendFuncSyms(dst []sym, funcs []grepfunc.FuncMatch) []sym {
 
 func appendTypeSyms(dst []sym, types []grepfunc.FuncMatch) []sym {
 	for _, match := range types {
-		sig := util.FirstSigLine(match.Body)
+		sig := server.FirstLine(match.Body, 120)
 		dst = append(dst, sym{file: match.File, line: match.Line, endLine: match.EndLine, kind: "type", sig: sig})
 	}
 

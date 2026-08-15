@@ -23,7 +23,7 @@ var (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "symbol_at",
-	Description: "Given file path + line number, return enclosing function or type — name, kind, start/end lines.",
+	Description: "Return the function/type enclosing a line — name, kind, start/end lines.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

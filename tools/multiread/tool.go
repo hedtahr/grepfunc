@@ -21,29 +21,29 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "multi_read",
-	Description: "Read file contents. path accepts a file path OR glob (* ? [). Multi-file with per-entry ranges: use reads array. Returns total line count.",
+	Description: "Read file contents. path = file or glob (* ? [). Multi-file ranges: use reads array. Returns total line count.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			pathKey: {
 				Type:        typeString,
-				Description: "File path or glob (e.g. 'tools/**/*.go'). Defaults to last file in session.",
+				Description: "File path or glob. Defaults to last file in session.",
 				Items:       nil,
 			},
 			"reads": {
 				Type:        typeArray,
-				Description: "Per-file ranges: [{path, start_line?, end_line?}]. path may glob. Max 10 entries, 20 files.",
+				Description: "Per-file ranges [{path, start_line?, end_line?}]. path may glob. Max 10 entries, 20 files.",
 				Items:       nil,
 			},
 			"lines": {
 				Type:        typeInteger,
-				Description: "Lines to read per file (head / mode 3). Default 60, max 200.",
+				Description: "Lines per file. Default 60, max 200.",
 				Items:       nil,
 			},
-			"start": {Type: typeInteger, Description: "First line to read, 1-based (range).", Items: nil},
+			"start": {Type: typeInteger, Description: "First line to read (1-based).", Items: nil},
 			"end": {
 				Type:        typeInteger,
-				Description: "Last line to read, inclusive (range).",
+				Description: "Last line to read (inclusive).",
 				Items:       nil,
 			},
 			"tail": {
@@ -51,10 +51,10 @@ var Tool = server.Tool{
 				Description: "Read last N lines. Exclusive with start/end/lines.",
 				Items:       nil,
 			},
-			"compact": {Type: typeBoolean, Description: "Terse output: no header, just code fences.", Items: nil},
+			"compact": {Type: typeBoolean, Description: "Terse: code fences only, no headers.", Items: nil},
 			"token_budget": {
 				Type:        typeInteger,
-				Description: "Max output chars. Overflow → line-boundary truncation.",
+				Description: "Max output chars; truncates at line boundaries.",
 				Items:       nil,
 			},
 		},
@@ -163,9 +163,9 @@ func handleSingle(input args) (*server.ToolCallResult, error) {
 	var buf strings.Builder
 
 	if input.Tail > 0 {
-		err = renderTail(input.Path, input.Tail, input.Compact, &buf)
+		err = renderTail(input.Path, input.Tail, input.Compact, input.TokenBudget <= 0, &buf)
 	} else {
-		err = renderRange(input.Path, input.Start, input.End, input.Lines, input.Compact, &buf)
+		err = renderRange(input.Path, input.Start, input.End, input.Lines, input.Compact, input.TokenBudget <= 0, &buf)
 	}
 
 	if err != nil {
@@ -235,7 +235,7 @@ func handleMulti(input args) (*server.ToolCallResult, error) {
 			continue
 		}
 
-		renderEntry(&buf, entry, input.Compact)
+		renderEntry(&buf, entry, input.Compact, input.TokenBudget <= 0)
 	}
 
 	return textResult(buf.String()), nil
@@ -408,11 +408,11 @@ func handleGlob(input args) (*server.ToolCallResult, error) {
 		return nil
 	})
 
-	return renderGlobResults(matched, glob, lines, input.Compact), nil
+	return renderGlobResults(matched, glob, lines, input.Compact, input.TokenBudget <= 0), nil
 }
 
 // renderGlobResults formats the matched files with a count header, or a zero-match notice.
-func renderGlobResults(matched []string, glob string, lines int, compact bool) *server.ToolCallResult {
+func renderGlobResults(matched []string, glob string, lines int, compact, showEst bool) *server.ToolCallResult {
 	if len(matched) == 0 {
 		return textResult(fmt.Sprintf("0 files matched %q", glob))
 	}
@@ -426,7 +426,7 @@ func renderGlobResults(matched []string, glob string, lines int, compact bool) *
 			buf.WriteByte('\n')
 		}
 
-		renderEntry(&buf, readEntry{Path: path, StartLine: 0, EndLine: lines}, compact)
+		renderEntry(&buf, readEntry{Path: path, StartLine: 0, EndLine: lines}, compact, showEst)
 	}
 
 	return textResult(buf.String())
@@ -454,7 +454,7 @@ func lineLimit(requested int) int {
 	return requested
 }
 
-func renderEntry(buf *strings.Builder, entry readEntry, compact bool) {
+func renderEntry(buf *strings.Builder, entry readEntry, compact, showEst bool) {
 	const maxEntryLines = 300
 
 	start := entry.StartLine
@@ -497,12 +497,12 @@ func renderEntry(buf *strings.Builder, entry readEntry, compact bool) {
 
 	ext := extOf(entry.Path)
 
-	writeEntryOutput(buf, ext, rel, start, actualEnd, total, lines, compact)
+	writeEntryOutput(buf, ext, rel, start, actualEnd, total, lines, compact, showEst)
 }
 
 // writeEntryOutput formats the entry header, lines, and closing fence.
 func writeEntryOutput(
-	buf *strings.Builder, ext, rel string, start, actualEnd, total int, lines []string, compact bool,
+	buf *strings.Builder, ext, rel string, start, actualEnd, total int, lines []string, compact, showEst bool,
 ) {
 	if compact {
 		fmt.Fprintf(buf, "```%s\n", ext)
@@ -517,7 +517,7 @@ func writeEntryOutput(
 
 	buf.WriteString("```\n")
 
-	if !compact {
+	if !compact && showEst {
 		buf.WriteString(estTokens(strings.Join(lines, "\n")))
 	}
 }
@@ -527,16 +527,16 @@ func estTokens(content string) string {
 	return fmt.Sprintf("≈%d tokens (chars/4)\n", len(content)/charsPerToken)
 }
 
-func renderRange(path string, start, end, lines int, compact bool, buf *strings.Builder) error {
+func renderRange(path string, start, end, lines int, compact, showEst bool, buf *strings.Builder) error {
 	if start > 0 || end > 0 {
-		return renderRangePortion(path, start, end, compact, buf)
+		return renderRangePortion(path, start, end, compact, showEst, buf)
 	}
 
-	return renderHeadPortion(path, lines, compact, buf)
+	return renderHeadPortion(path, lines, compact, showEst, buf)
 }
 
 // renderRangePortion renders the requested line range.
-func renderRangePortion(path string, start, end int, compact bool, buf *strings.Builder) error {
+func renderRangePortion(path string, start, end int, compact, showEst bool, buf *strings.Builder) error {
 	if start <= 0 {
 		start = 1
 	}
@@ -558,13 +558,13 @@ func renderRangePortion(path string, start, end int, compact bool, buf *strings.
 		stored = stored[:want]
 	}
 
-	writeRangeOutput(buf, extOf(path), strings.Join(stored, "\n"), server.RelPath(path), start, end, total, compact)
+	writeRangeOutput(buf, extOf(path), strings.Join(stored, "\n"), server.RelPath(path), start, end, total, compact, showEst)
 
 	return nil
 }
 
 // renderHeadPortion renders the first lines of the file.
-func renderHeadPortion(path string, lines int, compact bool, buf *strings.Builder) error {
+func renderHeadPortion(path string, lines int, compact, showEst bool, buf *strings.Builder) error {
 	lines = lineLimit(lines)
 
 	stored, firstLine, total, err := scanLines(path, 1, lines)
@@ -577,7 +577,7 @@ func renderHeadPortion(path string, lines int, compact bool, buf *strings.Builde
 		ext = shebangExt(firstLine)
 	}
 
-	writeHeadOutput(buf, ext, strings.Join(stored, "\n"), server.RelPath(path), lines, total, compact)
+	writeHeadOutput(buf, ext, strings.Join(stored, "\n"), server.RelPath(path), lines, total, compact, showEst)
 
 	return nil
 }
@@ -624,30 +624,36 @@ func scanLines(path string, readStart, stopAt int) ([]string, string, int, error
 }
 
 // writeRangeOutput formats the rendered line-range output.
-func writeRangeOutput(buf *strings.Builder, ext, content, rel string, start, end, total int, compact bool) {
+func writeRangeOutput(buf *strings.Builder, ext, content, rel string, start, end, total int, compact, showEst bool) {
 	if compact {
 		fmt.Fprintf(buf, "```%s\n%s\n```\n", ext, content)
 	} else {
 		fmt.Fprintf(buf, "Lines %d-%d of %d — %s:\n\n```%s\n%s\n```\n", start, end, total, rel, ext, content)
-		buf.WriteString(estTokens(content))
+		if showEst {
+			buf.WriteString(estTokens(content))
+		}
 	}
 }
 
 // writeHeadOutput formats the rendered head-of-file output.
-func writeHeadOutput(buf *strings.Builder, ext, content, rel string, lines, total int, compact bool) {
+func writeHeadOutput(buf *strings.Builder, ext, content, rel string, lines, total int, compact, showEst bool) {
 	switch {
 	case compact:
 		fmt.Fprintf(buf, "```%s\n%s\n```\n", ext, content)
 	case lines < total:
 		fmt.Fprintf(buf, "First %d of %d lines — %s:\n\n```%s\n%s\n```\n", lines, total, rel, ext, content)
-		buf.WriteString(estTokens(content))
+		if showEst {
+			buf.WriteString(estTokens(content))
+		}
 	default:
 		fmt.Fprintf(buf, "All %d lines — %s:\n\n```%s\n%s\n```\n", total, rel, ext, content)
-		buf.WriteString(estTokens(content))
+		if showEst {
+			buf.WriteString(estTokens(content))
+		}
 	}
 }
 
-func renderTail(path string, count int, compact bool, buf *strings.Builder) error {
+func renderTail(path string, count int, compact, showEst bool, buf *strings.Builder) error {
 	// #nosec G304 -- paths bounds-checked by server
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -685,7 +691,9 @@ func renderTail(path string, count int, compact bool, buf *strings.Builder) erro
 	} else {
 		fmt.Fprintf(buf, "Last %d of %d lines (L%d-%d) — %s:\n\n```%s\n%s\n```\n",
 			show, total, startLine, total, rel, ext, selected)
-		buf.WriteString(estTokens(selected))
+		if showEst {
+			buf.WriteString(estTokens(selected))
+		}
 	}
 
 	return nil

@@ -20,18 +20,18 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "tool_stats",
-	Description: "Usage telemetry across ALL projects: call count, error rate, avg duration, avg output bytes per tool, never-called tools.",
+	Description: "Usage telemetry: call counts, error rates, avg duration/output, never-called tools.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        "string",
-				Description: "Filter telemetry to one project directory. Omit for global.",
+				Description: "Filter to one project directory. Omit for global.",
 				Items:       nil,
 			},
 			"compact": {
 				Type:        "boolean",
-				Description: "Terse output: one line per tool.",
+				Description: "One line per tool.",
 				Items:       nil,
 			},
 		},

@@ -666,6 +666,21 @@ func ResolvePath(path string) string {
 	return filepath.Join(ProjectRoot, path)
 }
 
+// FirstLine returns the first line of s, trimmed. When capLen > 0 the line is
+// truncated to capLen chars with a trailing "...". A capLen of 0 keeps the
+// full line. Single source of truth for signature previews across tools.
+func FirstLine(s string, capLen int) string {
+	if before, _, found := strings.Cut(s, "\n"); found {
+		s = strings.TrimSpace(before)
+	}
+
+	if capLen > 0 && len(s) > capLen {
+		return s[:capLen] + "..."
+	}
+
+	return s
+}
+
 // TruncateToBudget trims s to budget bytes, cutting only at line boundaries so
 // each kept line stays complete (head-preserving). Falls back to a hard slice
 // when no newline falls within budget.
@@ -682,6 +697,15 @@ func TruncateToBudget(s string, budget int) string {
 	return s[:cut]
 }
 
+// BudgetHint returns the standard trimmed-output notice appended after budget truncation.
+func BudgetHint(budget int, tip string) string {
+	if tip != "" {
+		return fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. %s]\n", budget, tip)
+	}
+
+	return fmt.Sprintf("\n[Output trimmed to fit token_budget=%d.]\n", budget)
+}
+
 // BudgetResult trims the first text content of a result to budget chars, noting the trim.
 func BudgetResult(result *ToolCallResult, budget int) *ToolCallResult {
 	if result == nil || budget <= 0 || len(result.Content) == 0 {
@@ -693,8 +717,7 @@ func BudgetResult(result *ToolCallResult, budget int) *ToolCallResult {
 		return result
 	}
 
-	result.Content[0].Text = TruncateToBudget(text, budget) +
-		fmt.Sprintf("\n[Output trimmed to fit token_budget=%d.]\n", budget)
+	result.Content[0].Text = TruncateToBudget(text, budget) + BudgetHint(budget, "")
 
 	return result
 }

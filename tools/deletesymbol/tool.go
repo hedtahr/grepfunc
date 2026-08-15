@@ -26,7 +26,7 @@ var (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "delete_symbol",
-	Description: "Delete a named symbol (function/method/struct/interface/enum/class) from a file, including nested scopes.",
+	Description: "Delete a named symbol from a file, including nested scopes.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

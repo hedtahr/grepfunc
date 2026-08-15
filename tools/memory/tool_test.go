@@ -2,6 +2,7 @@ package memory
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -238,5 +239,37 @@ func saveKV(t *testing.T, key, value string) {
 	_, err := Handle(marshalArgs(t, map[string]any{keyField: key, valueField: value}))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListDefaultCap(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	for i := range 60 {
+		_, err := Handle(marshalArgs(t, map[string]any{
+			keyField:   fmt.Sprintf("key%d", i),
+			valueField: fmt.Sprintf("value%d", i),
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := Handle(marshalArgs(t, map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := result.Content[0].Text
+	if got := strings.Count(text, "→"); got != defaultListCap {
+		t.Errorf("default recall shows %d entries, want %d", got, defaultListCap)
+	}
+
+	if !strings.Contains(text, "10 more entries") {
+		t.Errorf("missing pagination hint, got %q", text)
 	}
 }

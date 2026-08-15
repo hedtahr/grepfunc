@@ -42,7 +42,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_func",
-	Description: "Function/method search with brace-aware bodies. body=true → full bodies; default signature + location. Plain-text: use grep.",
+	Description: "Function/method search, brace-aware bodies. body=true → full bodies; default signature+location.",
 	InputSchema: server.InputSchema{
 		Type:                 "object",
 		AdditionalProperties: false,
@@ -50,7 +50,7 @@ var Tool = server.Tool{
 			schemaPattern: {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Regex against function names or code. Matches anywhere inside a function, not just the signature.",
+				Description: "Regex on function names or bodies.",
 			},
 			schemaPath: {
 				Type:        schemaString,
@@ -60,7 +60,7 @@ var Tool = server.Tool{
 			schemaInclude: {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob to filter files. Supports **. Auto: common source extensions.",
+				Description: "Glob filter (**). Auto: source extensions.",
 			},
 			"max_results": {
 				Type:        schemaInteger,
@@ -75,7 +75,7 @@ var Tool = server.Tool{
 			schemaBody: {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Include full function body. Default false (signature + location only).",
+				Description: "Include full body. Default false (signature+location).",
 			},
 			"case_sensitive": {
 				Type:        schemaBoolean,
@@ -85,22 +85,22 @@ var Tool = server.Tool{
 			"summary": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "With body=true: first+last N lines + omission count.",
+				Description: "First+last N lines of bodies + omission count.",
 			},
 			"summary_lines": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Lines at start/end when summary=true. Default 5.",
+				Description: "N lines at start/end. Default 5.",
 			},
 			"names_only": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Only file:line:name — cheapest (~20x fewer tokens).",
+				Description: "Only file:line:name — cheapest.",
 			},
 			"include_types": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Also return type definitions (grep_func + grep_struct in one call).",
+				Description: "Also return type definitions.",
 			},
 			"sig_lines": {
 				Type:        schemaInteger,
@@ -110,7 +110,7 @@ var Tool = server.Tool{
 			"compact": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Terse output, keeps syntax highlighting.",
+				Description: "Terse output.",
 			},
 			"receiver": {
 				Type:        schemaString,
@@ -125,12 +125,12 @@ var Tool = server.Tool{
 			"token_budget": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Max output chars. Overflow → names_only, then line-boundary truncation.",
+				Description: "Max output chars; degrades to names_only, then truncates.",
 			},
 			"exclude_pattern": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Regex to exclude matching results (body and name).",
+				Description: "Regex to exclude results (body/name).",
 			},
 			"symbol": {
 				Type:        schemaString,
@@ -140,7 +140,7 @@ var Tool = server.Tool{
 			"context_lines": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Context lines around each match when symbol is set. Default 2, max 8.",
+				Description: "Context lines around matches when symbol set. Default 2, max 8.",
 			},
 		},
 		Required: []string{schemaPattern},
@@ -290,14 +290,42 @@ func renderPaged(arg args, all []FuncMatch) string {
 	end := min(start+arg.MaxResults, total)
 	page := all[start:end]
 
+	// When full bodies are requested and can't possibly fit the budget, render
+	// the names_only form directly — no point building output we'd throw away.
+	if arg.TokenBudget > 0 && arg.Body && !arg.NamesOnly && estBodyBytes(page) > arg.TokenBudget {
+		return renderBudgetTerse(arg, page, total, start, end)
+	}
+
 	output := renderResults(arg, page, total, start, end, arg.NamesOnly)
 	if arg.TokenBudget > 0 && len(output) > arg.TokenBudget && !arg.NamesOnly {
 		output = renderResults(arg, page, total, start, end, true)
-		output = server.TruncateToBudget(output, arg.TokenBudget)
-
-		output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
-			"Use names_only=true or reduce scope for more.]\n", arg.TokenBudget)
+		output = server.TruncateToBudget(output, arg.TokenBudget) + budgetTip(arg.TokenBudget)
 	}
+
+	return output
+}
+
+// budgetTip returns the standard trimmed-output notice for grep_func renders.
+func budgetTip(budget int) string {
+	return server.BudgetHint(budget, "Use names_only=true or reduce scope for more.")
+}
+
+// estBodyBytes estimates the rendered bytes of a page's bodies plus per-match overhead.
+func estBodyBytes(page []FuncMatch) int {
+	bytes := 0
+
+	for _, m := range page {
+		bytes += len(m.Body) + 80
+	}
+
+	return bytes
+}
+
+// renderBudgetTerse builds names_only output bounded by the token budget.
+func renderBudgetTerse(arg args, page []FuncMatch, total, start, end int) string {
+	output := renderResults(arg, page, total, start, end, true)
+	output = server.TruncateToBudget(output, arg.TokenBudget)
+	output += server.BudgetHint(arg.TokenBudget, "Bodies exceed the budget — shown as names_only. Use summary=true or a narrower pattern.")
 
 	return output
 }
@@ -418,7 +446,7 @@ func appendMatch(buf *strings.Builder, match FuncMatch, loc string, namesOnly, i
 	}
 
 	if includeBody {
-		fmt.Fprintf(buf, "%s%d-%d: %s\n", loc, match.Line, match.EndLine, firstLine(match.Body, true))
+		fmt.Fprintf(buf, "%s%d-%d: %s\n", loc, match.Line, match.EndLine, server.FirstLine(match.Body, 0))
 	} else {
 		sig := kindPrefix(match.Kind, arg.IncludeTypes) + sigPreview(match.Body, arg.SigLines)
 		fmt.Fprintf(buf, "%s%d-%d: %s\n", loc, match.Line, match.EndLine, sig)
@@ -500,7 +528,7 @@ func filterByExclude(matches []FuncMatch, excludePattern string) ([]FuncMatch, e
 
 func sigPreview(body string, maxLines int) string {
 	if maxLines <= 1 {
-		return firstLine(body, false)
+		return server.FirstLine(body, 120)
 	}
 
 	lines := strings.SplitN(body, "\n", maxLines+1)
@@ -514,18 +542,6 @@ func sigPreview(body string, maxLines int) string {
 	}
 
 	return s
-}
-
-func firstLine(line string, includeBody bool) string {
-	if before, _, found := strings.Cut(line, "\n"); found {
-		line = strings.TrimSpace(before)
-	}
-
-	if !includeBody && len(line) > 120 {
-		return line[:120] + "..."
-	}
-
-	return line
 }
 
 // SummarizeBody keeps the first and last maxLines lines of a body, marking omitted lines.
@@ -725,10 +741,8 @@ func renderScopedTerse(arg args, symbols []FuncMatch, patRe *regexp.Regexp) stri
 	}
 
 	output := terse.String()
-	output = server.TruncateToBudget(output, arg.TokenBudget)
-
-	output += fmt.Sprintf("\n[Output trimmed to fit token_budget=%d. "+
-		"Reduce context_lines or scope for more.]\n", arg.TokenBudget)
+	output = server.TruncateToBudget(output, arg.TokenBudget) +
+		server.BudgetHint(arg.TokenBudget, "Reduce context_lines or scope for more.")
 
 	return output
 }

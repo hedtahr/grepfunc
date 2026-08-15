@@ -17,18 +17,18 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "memory",
-	Description: "Remember/recall project conventions across sessions. No args → recall all. key+value → save. Use FIRST at session start. Store only invariants (style, naming, architecture).",
+	Description: "Remember/recall project conventions across sessions. No args → recall; key+value → save. Store only invariants (style, naming, architecture).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        typeString,
-				Description: "Project directory. Defaults to project root. Memory stored at <project>/.llm/memory.json.",
+				Description: "Project directory. Defaults to project root.",
 				Items:       nil,
 			},
 			"key": {
 				Type:        typeString,
-				Description: "Fact key, dot notation (e.g. 'style.comments'). Avoid 'file.X' — goes stale.",
+				Description: "Fact key, dot notation (e.g. 'style.comments'). Avoid 'file.X' (stale).",
 				Items:       nil,
 			},
 			"value": {
@@ -44,7 +44,7 @@ var Tool = server.Tool{
 			},
 			"prefix": {
 				Type:        typeString,
-				Description: "When recalling: filter keys starting with this prefix (e.g. 'decisions').",
+				Description: "When recalling: filter keys starting with this prefix.",
 				Items:       nil,
 			},
 			"keys_only": {
@@ -64,7 +64,7 @@ var Tool = server.Tool{
 			},
 			"limit": {
 				Type:        typeInteger,
-				Description: "Max entries in list output (most recent first). Overflow noted with hint.",
+				Description: "Max entries in list output (most recent first). Default 50; overflow noted with hint.",
 				Items:       nil,
 			},
 		},
@@ -74,9 +74,10 @@ var Tool = server.Tool{
 }
 
 const (
-	maxEntries = 100
-	memoryDir  = ".llm"
-	memoryFile = "memory.json"
+	maxEntries     = 100
+	defaultListCap = 50
+	memoryDir      = ".llm"
+	memoryFile     = "memory.json"
 
 	memoryDirMode  = 0700
 	memoryFileMode = 0600
@@ -303,12 +304,17 @@ func handleList(mem store, input args) *server.ToolCallResult {
 	}
 
 	total := len(entries)
-	if input.Limit > 0 && input.Limit < total {
-		entries = entries[:input.Limit]
-	}
 
 	if input.KeysOnly {
 		return textResult(keysOnlyText(entries))
+	}
+
+	if input.Limit <= 0 {
+		input.Limit = defaultListCap
+	}
+
+	if input.Limit < total {
+		entries = entries[:input.Limit]
 	}
 
 	text := listText(entries, input.Namespace)

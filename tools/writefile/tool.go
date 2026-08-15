@@ -21,7 +21,7 @@ var errPathRequired = errors.New("path is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "write_file",
-	Description: "Create a new file or fully overwrite one. For complete rewrites; prefer patch_file for surgical edits.",
+	Description: "Create or fully overwrite a file. Prefer patch_file for surgical edits.",
 	InputSchema: server.InputSchema{
 		Type:                 "object",
 		AdditionalProperties: false,

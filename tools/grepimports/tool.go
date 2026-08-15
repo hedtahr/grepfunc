@@ -27,14 +27,14 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_imports",
-	Description: "Import relationships: which files import a module, or what one file imports. Language-aware (Go, Python, JS/TS, Rust).",
+	Description: "Import relationships: which files import a module, or a file's imports. Go/Python/JS/Rust.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"module": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Module/package name or path substring. E.g. 'grepfunc'. Omit with 'file' to list all imports.",
+				Description: "Module/package name substring.",
 			},
 			"path": {
 				Type:        schemaString,
@@ -44,12 +44,12 @@ var Tool = server.Tool{
 			"include": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob filter (e.g. '**/*.go'). Auto-detects source files.",
+				Description: "Glob filter. Auto-detects source files.",
 			},
 			"file": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Specific file to inspect — lists ALL imports (ignores module/path).",
+				Description: "Specific file — lists all its imports (ignores module/path).",
 			},
 			"compact": {
 				Type:        schemaBoolean,
@@ -59,7 +59,7 @@ var Tool = server.Tool{
 			"body": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Show matched import lines inline (code block per file).",
+				Description: "Show matched import lines inline.",
 			},
 			"names_only": {
 				Type:        schemaBoolean,
@@ -69,7 +69,7 @@ var Tool = server.Tool{
 			"token_budget": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Max output chars. Overflow → line-boundary truncation.",
+				Description: "Max output chars; truncates at line boundaries.",
 			},
 		},
 		AdditionalProperties: false,

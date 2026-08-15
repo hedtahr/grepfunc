@@ -21,28 +21,28 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "find_related",
-	Description: "Find files RELATED to a file: tests (*_test.*, *.spec.*), mocks (mock_*, *_mock.*), siblings, same-named files nearby.",
+	Description: "Find related files: tests, mocks, siblings, same-named files nearby.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        "string",
-				Description: "Source file to find related files for. Defaults to last file operated on.",
+				Description: "Source file. Defaults to last file operated on.",
 				Items:       nil,
 			},
 			"compact": {
 				Type:        "boolean",
-				Description: "Terse output: no category labels.",
+				Description: "No category labels.",
 				Items:       nil,
 			},
 			"with_symbols": {
 				Type:        "boolean",
-				Description: "Include top-level func/type names found in each related file.",
+				Description: "Include top-level func/type names per related file.",
 				Items:       nil,
 			},
 			"token_budget": {
 				Type:        "integer",
-				Description: "Max output chars. Overflow → line-boundary truncation.",
+				Description: "Max output chars; truncates at line boundaries.",
 				Items:       nil,
 			},
 		},

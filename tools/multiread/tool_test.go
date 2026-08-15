@@ -69,7 +69,7 @@ func TestTokenEstimateLine(t *testing.T) {
 
 	// Non-compact head output must carry a chars/4 estimate line.
 	content := "hello world"
-	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, false)
+	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, false, true)
 
 	got := buf.String()
 	if !strings.Contains(got, "≈2 tokens (chars/4)") {
@@ -78,10 +78,18 @@ func TestTokenEstimateLine(t *testing.T) {
 
 	// Compact output stays bare.
 	buf.Reset()
-	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, true)
+	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, true, true)
 
 	if got := buf.String(); got != "```txt\n"+content+"\n```\n" {
 		t.Errorf("compact output should be unchanged, got %q", got)
+	}
+
+	// showEst=false (token_budget set) suppresses the estimate line.
+	buf.Reset()
+	writeHeadOutput(&buf, "txt", content, "hello.txt", 1, 1, false, false)
+
+	if got := buf.String(); strings.Contains(got, "tokens (chars/4)") {
+		t.Errorf("showEst=false must drop the estimate line, got %q", got)
 	}
 }
 
@@ -114,7 +122,7 @@ func TestRenderTailEdges(t *testing.T) {
 
 			var buf strings.Builder
 
-			err = renderTail(path, tcase.tail, true, &buf)
+			err = renderTail(path, tcase.tail, true, true, &buf)
 			if err != nil {
 				t.Fatalf("renderTail: %v", err)
 			}
@@ -139,7 +147,7 @@ func TestRenderTailLimit(t *testing.T) {
 
 	var buf strings.Builder
 
-	err = renderTail(path, 100, true, &buf)
+	err = renderTail(path, 100, true, true, &buf)
 	if err != nil {
 		t.Fatal(err)
 	}

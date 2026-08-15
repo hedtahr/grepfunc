@@ -39,7 +39,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_context",
-	Description: "Matching lines WITH surrounding context for non-function patterns (constants, imports, config). N lines before/after, deduplicated — replaces grep -C.",
+	Description: "Matching lines with context for non-function patterns (constants, imports, config). N lines before/after, deduplicated.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -56,7 +56,7 @@ var Tool = server.Tool{
 			"include": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob filter. E.g. **/*.go. Default: all source files.",
+				Description: "Glob filter. Default: all source files.",
 			},
 			"context_lines": {
 				Type:        schemaInteger,
@@ -86,7 +86,7 @@ var Tool = server.Tool{
 			"scope": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Annotate each match with enclosing function/type name.",
+				Description: "Annotate with enclosing function/type name.",
 			},
 			"group_by_file": {
 				Type:        schemaBoolean,
@@ -101,12 +101,12 @@ var Tool = server.Tool{
 			"token_budget": {
 				Type:        schemaInteger,
 				Items:       nil,
-				Description: "Max output chars. Overflow → file:line only, then truncate.",
+				Description: "Max output chars; degrades to file:line, then truncates.",
 			},
 			"count_only": {
 				Type:        schemaBoolean,
 				Items:       nil,
-				Description: "Match counts per file only — zero content tokens.",
+				Description: "Match counts per file only — cheapest.",
 			},
 		},
 		AdditionalProperties: false,

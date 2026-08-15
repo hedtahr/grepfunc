@@ -26,7 +26,7 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "git_context",
-	Description: "Compact git orientation: branch, recent commits, status, optional diff --stat. Use at session start.",
+	Description: "Git orientation: branch, recent commits, status, optional diff --stat.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

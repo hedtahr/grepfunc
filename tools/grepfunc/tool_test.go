@@ -884,3 +884,51 @@ func TestBodyTrueIncludesBody(t *testing.T) {
 		t.Error("body=true output should contain code blocks")
 	}
 }
+
+func TestRenderPagedBudgetSinglePass(t *testing.T) {
+	big := FuncMatch{
+		File: "/p/f.go", Line: 1, EndLine: 50, Name: "bigOne", Kind: "func",
+		Body: "func bigOne() {\n" + strings.Repeat("\twork()\n", 40) + "}\n",
+	}
+
+	// Tiny budget + body=true → names_only direct render, no bodies, hint present.
+	out := renderPaged(args{Pattern: "big", Path: "/p", MaxResults: 15, Body: true, TokenBudget: 100}, []FuncMatch{big})
+	if strings.Contains(out, "work()") {
+		t.Error("bodies must not be rendered when budget is tiny")
+	}
+
+	if !strings.Contains(out, "bigOne") {
+		t.Error("names_only output must include the symbol name")
+	}
+
+	if !strings.Contains(out, "Output trimmed to fit token_budget=100") {
+		t.Errorf("missing budget hint in %q", out)
+	}
+
+	// No budget → full bodies rendered.
+	full := renderPaged(args{Pattern: "big", Path: "/p", MaxResults: 15, Body: true}, []FuncMatch{big})
+	if !strings.Contains(full, "work()") {
+		t.Error("bodies must render when no budget is set")
+	}
+}
+
+func TestRenderPagedBudgetSigFallback(t *testing.T) {
+	// Body=false: the single-pass guard doesn't apply, so an overflowing full
+	// (signature) render must fall back to names_only + truncate.
+	var all []FuncMatch
+	for i := range 20 {
+		all = append(all, FuncMatch{
+			File: "/p/f.go", Line: i + 1, EndLine: i + 1, Name: "symN", Kind: "func",
+			Body: "func symN() {",
+		})
+	}
+
+	out := renderPaged(args{Pattern: "symN", Path: "/p", MaxResults: 20, TokenBudget: 200}, all)
+	if !strings.Contains(out, "names_only") {
+		t.Errorf("fallback hint should suggest names_only, got %q", out)
+	}
+
+	if !strings.Contains(out, "Output trimmed to fit token_budget=200") {
+		t.Errorf("missing budget hint in %q", out)
+	}
+}

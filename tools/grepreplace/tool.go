@@ -38,7 +38,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_replace",
-	Description: "Regex find-and-replace across many files in one call. Per-file change summary + dry_run preview. Go regex with capture groups ($1, $2).",
+	Description: "Regex find-and-replace across many files. Per-file summary + dry_run preview. Go regex ($1, $2 groups).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -51,7 +51,7 @@ var Tool = server.Tool{
 			},
 			keyInclude:       {Type: typeString, Description: "Glob filter (e.g. **/*.go). Default: *.", Items: nil},
 			"dry_run":        {Type: typeBoolean, Description: "Preview without writing.", Items: nil},
-			"case_sensitive": {Type: typeBoolean, Description: "Default false (case-insensitive).", Items: nil},
+			"case_sensitive": {Type: typeBoolean, Description: "Case-insensitive by default.", Items: nil},
 			"max_files":      {Type: typeInteger, Description: "Max files to process. Default 50, max 200.", Items: nil},
 		},
 		Required:             []string{keyPattern, keyReplacement},

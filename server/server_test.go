@@ -384,3 +384,48 @@ func TestPendingRootApplied(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestFirstLine(t *testing.T) {
+	cases := []struct {
+		in     string
+		capLen int
+		want   string
+	}{
+		{"func Foo() {", 0, "func Foo() {"},
+		{"func Foo() {\n\tbody\n}", 0, "func Foo() {"},
+		{"  func Foo() {\n\tbody\n}", 0, "func Foo() {"},
+		{"func Foo() {", 120, "func Foo() {"},
+		{"abcdefghijklmnopqrstuvwxyz", 5, "abcde..."},
+		{"abcdefghijklmnopqrstuvwxyz", 120, "abcdefghijklmnopqrstuvwxyz"},
+	}
+	for _, c := range cases {
+		if got := FirstLine(c.in, c.capLen); got != c.want {
+			t.Errorf("FirstLine(%q, %d) = %q, want %q", c.in, c.capLen, got, c.want)
+		}
+	}
+}
+
+func TestBudgetHint(t *testing.T) {
+	plain := BudgetHint(500, "")
+	if !strings.Contains(plain, "token_budget=500") || strings.Contains(plain, ". ") {
+		t.Errorf("BudgetHint(500, \"\") = %q, want plain notice", plain)
+	}
+
+	withTip := BudgetHint(500, "Reduce scope.")
+	if !strings.Contains(withTip, "Reduce scope.") {
+		t.Errorf("BudgetHint(500, tip) = %q, want tip included", withTip)
+	}
+}
+
+func TestBudgetResultTruncates(t *testing.T) {
+	res := &ToolCallResult{Content: []ToolCallContent{{Type: "text", Text: strings.Repeat("x", 100)}}}
+	res = BudgetResult(res, 20)
+	got := res.Content[0].Text
+	if len(got) > 100 {
+		t.Fatalf("BudgetResult did not shorten output")
+	}
+
+	if !strings.Contains(got, "Output trimmed to fit token_budget=20") {
+		t.Errorf("BudgetResult missing notice, got %q", got)
+	}
+}

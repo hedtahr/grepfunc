@@ -12,7 +12,6 @@ import (
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
-	"github.com/hedtahr/grepfunc/tools/internal/util"
 )
 
 const (
@@ -38,22 +37,22 @@ var errNameRequired = errors.New("name is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "find_symbol",
-	Description: "Find a symbol by NAME: returns file:line + signature. body=true for full body. Word-boundary match first, substring fallback, then typo suggestions.",
+	Description: "Find a symbol by name: file:line + signature. body=true for full body.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name":           {Type: typeString, Description: "Symbol name to find (function/method/type). Case-insensitive by default.", Items: nil},
-			"path":           {Type: typeString, Description: "Directory to search. Defaults to project root. Supports **.", Items: nil},
-			"include":        {Type: typeString, Description: "Glob to filter files. Auto: common source extensions.", Items: nil},
+			"name":           {Type: typeString, Description: "Symbol name (function/method/type). Case-insensitive.", Items: nil},
+			"path":           {Type: typeString, Description: "Directory to search. Defaults to project root.", Items: nil},
+			"include":        {Type: typeString, Description: "Glob filter. Auto: source extensions.", Items: nil},
 			"kind":           {Type: typeString, Description: "Filter by kind: 'func', 'type', or 'any' (default).", Items: nil},
 			"max_results":    {Type: typeInteger, Description: "Max results. Default 10, max 30.", Items: nil},
-			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive matching. Default false.", Items: nil},
+			"case_sensitive": {Type: typeBoolean, Description: "Case-sensitive. Default false.", Items: nil},
 			"compact":        {Type: typeBoolean, Description: "Terse output.", Items: nil},
 			"names_only":     {Type: typeBoolean, Description: "Only file:line:name — cheapest.", Items: nil},
-			"body":           {Type: typeBoolean, Description: "Full body of each match — no second call. Default false.", Items: nil},
-			"token_budget":   {Type: typeInteger, Description: "Max output chars. Overflow → names_only, then line-boundary truncation.", Items: nil},
-			"summary":        {Type: typeBoolean, Description: "With body=true: first+last N lines + omission count.", Items: nil},
-			"summary_lines":  {Type: typeInteger, Description: "Lines at start/end when summary=true. Default 5.", Items: nil},
+			"body":           {Type: typeBoolean, Description: "Full body of each match. Default false.", Items: nil},
+			"token_budget":   {Type: typeInteger, Description: "Max output chars; degrades to names_only, then truncates.", Items: nil},
+			"summary":        {Type: typeBoolean, Description: "First+last N lines of bodies + omission count.", Items: nil},
+			"summary_lines":  {Type: typeInteger, Description: "N lines at start/end. Default 5.", Items: nil},
 		},
 		Required:             []string{"name"},
 		AdditionalProperties: false,
@@ -378,7 +377,7 @@ func renderBody(buf *strings.Builder, arg args, ext, body string) {
 }
 
 func renderSigLine(buf *strings.Builder, ext, body string) {
-	sigLine := util.FirstSigLine(body)
+	sigLine := server.FirstLine(body, 120)
 	if sigLine != "" {
 		fmt.Fprintf(buf, "```%s\n%s\n```", ext, sigLine)
 	}

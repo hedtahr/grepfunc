@@ -30,16 +30,16 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "file_stats",
-	Description: "Instant project overview: file counts, line counts, extension breakdown per dir. Zero content overhead. Mode top: files by symbol count.",
+	Description: "Project overview: file/line counts, extension breakdown per dir. Mode 'top': files by symbol count.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"path":    {Type: typeString, Description: "Root directory to analyze. Defaults to project root.", Items: nil},
-			"include": {Type: typeString, Description: "Glob filter. Defaults to all source files (39;*39;).", Items: nil},
-			"depth":   {Type: "integer", Description: "Max directory depth to group by. Default 2, max 5; deeper dirs fold into parent.", Items: nil},
-			"compact": {Type: "boolean", Description: "Terse output: one line per dir, no header.", Items: nil},
-			"mode":    {Type: typeString, Description: "Mode: 'stats' (default) or 'top' — top returns files with most symbols (funcs+types).", Items: nil},
-			"top_n":   {Type: "integer", Description: "Number of top files in 'top' mode. Default 10, max 30.", Items: nil},
+			"path":    {Type: typeString, Description: "Root directory. Defaults to project root.", Items: nil},
+			"include": {Type: typeString, Description: "Glob filter. Defaults to all source files.", Items: nil},
+			"depth":   {Type: "integer", Description: "Directory depth to group by. Default 2, max 5.", Items: nil},
+			"compact": {Type: "boolean", Description: "One line per dir, no header.", Items: nil},
+			"mode":    {Type: typeString, Description: "Mode: 'stats' (default) or 'top' (files with most symbols).", Items: nil},
+			"top_n":   {Type: "integer", Description: "Top files count. Default 10, max 30.", Items: nil},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,

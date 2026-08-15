@@ -32,7 +32,7 @@ var (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "rename_symbol",
-	Description: "Rename a function, type, or variable across the entire project. Word-boundary matching — replaces grep_refs → batch_patch → verify.",
+	Description: "Rename a function/type/variable project-wide. Word-boundary matching.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -40,21 +40,21 @@ var Tool = server.Tool{
 			keyNewName: {Type: typeString, Description: "New name for the symbol.", Items: nil},
 			"path": {
 				Type:        typeString,
-				Description: "Root directory to search. Defaults to project root.",
+				Description: "Root directory. Defaults to project root.",
 				Items:       nil,
 			},
 			"include": {
 				Type:        typeString,
-				Description: "Glob filter e.g. '**/*.go'. Default: all source files.",
+				Description: "Glob filter. Default: all source files.",
 				Items:       nil,
 			},
 			"kind": {
 				Type:        typeString,
-				Description: "Declaration kind filter: 'func', 'type', 'any' (default). Only affects dry-run count.",
+				Description: "Declaration kind: 'func', 'type', 'any' (default).",
 				Items:       nil,
 			},
 			"dry_run":        {Type: "boolean", Description: "Preview changes without writing.", Items: nil},
-			"case_sensitive": {Type: "boolean", Description: "Case-sensitive name matching. Default false.", Items: nil},
+			"case_sensitive": {Type: "boolean", Description: "Case-sensitive. Default false.", Items: nil},
 		},
 		Required:             []string{keyOldName, keyNewName},
 		AdditionalProperties: false,

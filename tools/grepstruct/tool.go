@@ -40,19 +40,19 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			keyPattern:        {Type: typeString, Description: "Regex against type names or body contents. Examples: 'User', 'Handler', 'interface'.", Items: nil},
+			keyPattern:        {Type: typeString, Description: "Regex on type names or bodies.", Items: nil},
 			keyPath:           {Type: typeString, Description: "Directory to search. Defaults to project root.", Items: nil},
-			keyInclude:        {Type: typeString, Description: "Glob to filter files, ** recursive. Auto: common source extensions.", Items: nil},
+			keyInclude:        {Type: typeString, Description: "Glob filter (** recursive). Auto: source extensions.", Items: nil},
 			"max_results":     {Type: typeInteger, Description: "Max definitions. Default 15, max 50.", Items: nil},
 			"offset":          {Type: typeInteger, Description: "Pagination offset (0-based).", Items: nil},
-			keyBody:           {Type: typeBoolean, Description: "Include full body. Default false (name + location only).", Items: nil},
+			keyBody:           {Type: typeBoolean, Description: "Include full body. Default false (name+location).", Items: nil},
 			"case_sensitive":  {Type: typeBoolean, Description: "Case-sensitive regex. Default false.", Items: nil},
 			"summary":         {Type: typeBoolean, Description: "With body=true: first+last N lines + omission count.", Items: nil},
-			"summary_lines":   {Type: typeInteger, Description: "Lines at start/end when summary=true. Default 5.", Items: nil},
-			"names_only":      {Type: typeBoolean, Description: "Only file:line:name — cheapest (~20x fewer tokens).", Items: nil},
+			"summary_lines":   {Type: typeInteger, Description: "N lines at start/end. Default 5.", Items: nil},
+			"names_only":      {Type: typeBoolean, Description: "Only file:line:name — cheapest.", Items: nil},
 			"compact":         {Type: typeBoolean, Description: "Terse output.", Items: nil},
-			"exclude_pattern": {Type: typeString, Description: "Regex to exclude matching results (body and name).", Items: nil},
-			"token_budget":    {Type: typeInteger, Description: "Max output chars. Overflow → line-boundary truncation.", Items: nil},
+			"exclude_pattern": {Type: typeString, Description: "Regex to exclude results (body/name).", Items: nil},
+			"token_budget":    {Type: typeInteger, Description: "Max output chars; truncates at line boundaries.", Items: nil},
 		},
 		Required:             []string{keyPattern},
 		AdditionalProperties: false,
@@ -198,9 +198,9 @@ func renderMatches(buf *strings.Builder, arg args, page []grepfunc.FuncMatch) {
 		}
 
 		if includeBody {
-			fmt.Fprintf(buf, "%s:%d-%d: %s\n", rel, match.Line, match.EndLine, util.FirstLine(match.Body, true))
+			fmt.Fprintf(buf, "%s:%d-%d: %s\n", rel, match.Line, match.EndLine, server.FirstLine(match.Body, 0))
 		} else {
-			fmt.Fprintf(buf, "%s:%d-%d: %s\n", rel, match.Line, match.EndLine, util.FirstLine(match.Body, false))
+			fmt.Fprintf(buf, "%s:%d-%d: %s\n", rel, match.Line, match.EndLine, server.FirstLine(match.Body, 120))
 		}
 
 		if includeBody {

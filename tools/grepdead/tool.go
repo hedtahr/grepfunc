@@ -32,19 +32,19 @@ const refChunkSize = 30
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_dead",
-	Description: "Identify dead code — declared symbols with zero references outside their file. Cap with max_symbols.",
+	Description: "Dead code: declared symbols with zero references outside their file.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
 			"path": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Root directory to search. Defaults to project root.",
+				Description: "Root directory. Defaults to project root.",
 			},
 			"include": {
 				Type:        schemaString,
 				Items:       nil,
-				Description: "Glob filter for declaration and reference search. E.g. '**/*.go'.",
+				Description: "Glob filter for declaration/reference search.",
 			},
 			"kind": {
 				Type:        schemaString,
@@ -54,12 +54,12 @@ var Tool = server.Tool{
 			"min_lines": {
 				Type:        "integer",
 				Items:       nil,
-				Description: "Skip symbols with bodies shorter than this many lines. Default 2.",
+				Description: "Skip symbols with bodies shorter than N lines. Default 2.",
 			},
 			"max_symbols": {
 				Type:        "integer",
 				Items:       nil,
-				Description: "Max symbols to check (cap to avoid timeouts). Default 200.",
+				Description: "Max symbols to check. Default 200.",
 			},
 			"compact": {
 				Type:        "boolean",

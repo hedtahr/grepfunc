@@ -38,7 +38,7 @@ var Tool = server.Tool{
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
-			"name":           {Type: typeString, Description: "Symbol name to find references to (word-boundary match).", Items: nil},
+			"name":           {Type: typeString, Description: "Symbol name (word-boundary match).", Items: nil},
 			"path":           {Type: typeString, Description: "Directory to search. Defaults to project root.", Items: nil},
 			"include":        {Type: typeString, Description: "Glob filter. Default: all source files.", Items: nil},
 			"context_lines":  {Type: typeInteger, Description: "Lines before/after each reference. Default 2, max 8.", Items: nil},
@@ -47,10 +47,10 @@ var Tool = server.Tool{
 			"offset":         {Type: typeInteger, Description: "Pagination offset (0-based).", Items: nil},
 			"compact":        {Type: typeBoolean, Description: "Terse output.", Items: nil},
 			"names_only":     {Type: typeBoolean, Description: "Only file:line — cheapest.", Items: nil},
-			"scope":          {Type: typeBoolean, Description: "Annotate each reference with enclosing function/method name.", Items: nil},
+			"scope":          {Type: typeBoolean, Description: "Annotate with enclosing function/method name.", Items: nil},
 			"calls_only":     {Type: typeBoolean, Description: "Only invocation lines: Name( or x.Name().", Items: nil},
-			"receiver":       {Type: typeString, Description: "With calls_only: only calls on this receiver/variable (e.g. 's' → s.MethodName().", Items: nil},
-			"token_budget":   {Type: typeInteger, Description: "Max output chars. Overflow → line-boundary truncation.", Items: nil},
+			"receiver":       {Type: typeString, Description: "With calls_only: only calls on this receiver/variable.", Items: nil},
+			"token_budget":   {Type: typeInteger, Description: "Max output chars; truncates at line boundaries.", Items: nil},
 		},
 		Required:             []string{"name"},
 		AdditionalProperties: false,

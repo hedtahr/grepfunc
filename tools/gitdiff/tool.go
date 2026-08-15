@@ -29,7 +29,7 @@ var errGitDiff = errors.New("git diff failed")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "git_diff",
-	Description: "Show git diff output for a file or all changes. staged=true for staged; base='HEAD~1' to compare commits.",
+	Description: "Show git diff for a file or all changes. staged=true; base='HEAD~1' compares commits.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -55,7 +55,7 @@ var Tool = server.Tool{
 			},
 			"base": {
 				Type:        "string",
-				Description: "Base commit/branch to diff against (e.g. 'HEAD~1', 'main'). Default: working tree.",
+				Description: "Base commit/branch (e.g. 'HEAD~1', 'main'). Default: working tree.",
 				Items:       nil,
 			},
 		},
