@@ -3,6 +3,8 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"os"
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/deletesymbol"
@@ -64,5 +66,9 @@ func main() {
 	srv.Register(grepreplace.Tool, grepreplace.Handle)
 	srv.Register(toolstats.Tool, toolstats.Handle)
 	srv.Register(writefile.Tool, writefile.Handle)
-	srv.Run()
+
+	if err := srv.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "grepfunc: %v\n", err)
+		os.Exit(1)
+	}
 }

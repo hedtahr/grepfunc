@@ -3,9 +3,11 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +18,11 @@ import (
 )
 
 const (
-	jsonrpcVersion    = "2.0"
-	scannerInitialBuf = 1024 * 1024
-	scannerMaxBuf     = 10 * 1024 * 1024
-	requestTimeout    = 3 * time.Second
-	filePermPrivate   = 0o600
-	dirPermPrivate    = 0o700
+	jsonrpcVersion        = "2.0"
+	scannerInitialBuf     = 1024 * 1024
+	defaultRequestTimeout = 3 * time.Second
+	filePermPrivate       = 0o600
+	dirPermPrivate        = 0o700
 )
 
 var (
@@ -50,6 +51,17 @@ type rawResponse struct {
 	Err    *RPCError
 }
 
+// Package-level cross-tool state.
+//
+// WRITE CONTRACT: every write to ProjectRoot, LastPath, lastDir, and
+// projectRootLocked happens either (a) before Run starts (main.go) or
+// (b) synchronously on the Run goroutine — handlers are invoked inline from
+// processLine, so ResolvePath/SetLastPath/applyCwdOverride all run there.
+// Goroutines spawned by Run (requestRoots, persistProjectRoot, autoDiscover,
+// writeCachedRoot) must never touch these directly: requestRoots stages its
+// result in pendingRoot (atomic) for the Run loop to apply via
+// applyPendingRootIfAny, and the persist goroutines only write files.
+//
 // ProjectRoot returns the project root discovered during initialize, or "." if unknown.
 var ProjectRoot = "." //nolint:gochecknoglobals // deliberate cross-tool server state
 
@@ -111,60 +123,68 @@ func (s *Server) Register(tool Tool, handler ToolHandler) {
 	s.tools = append(s.tools, ToolEntry{Tool: tool, Handler: handler})
 }
 
-// Run serves JSON-RPC messages from stdin until EOF.
-func (s *Server) Run() {
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, scannerInitialBuf), scannerMaxBuf)
+// Run serves JSON-RPC messages from stdin until EOF. Messages are read as
+// whole lines with no length cap, so oversized tool outputs cannot crash the
+// server. Returns a non-nil error on any read failure (not on EOF).
+func (s *Server) Run() error {
+	reader := bufio.NewReaderSize(os.Stdin, scannerInitialBuf)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		// Peek to detect client responses vs requests.
-		var env struct {
-			ID     any             `json:"id"`
-			Method string          `json:"method"`
-			Result json.RawMessage `json:"result"`
-			Error  *RPCError       `json:"error"`
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			s.processLine(line)
 		}
 
-		err := json.Unmarshal(line, &env)
 		if err != nil {
-			s.sendError(nil, -32700, "Parse error", err.Error())
-
-			continue
-		}
-		// Route client response to pending channel (server-initiated request).
-		if env.Method == "" {
-			if chVal, ok := s.pending.Load(fmt.Sprint(env.ID)); ok {
-				if ch, ok := chVal.(chan rawResponse); ok {
-					ch <- rawResponse{Result: env.Result, Err: env.Error}
-				}
+			if errors.Is(err, io.EOF) {
+				return nil
 			}
 
-			continue
-		}
-
-		var req Request
-
-		err = json.Unmarshal(line, &req)
-		if err != nil {
-			s.sendError(nil, -32700, "Parse error", err.Error())
-
-			continue
-		}
-
-		resp := s.handle(req)
-		if resp != nil {
-			s.writeJSON(resp)
+			return fmt.Errorf("read stdin: %w", err)
 		}
 	}
+}
 
-	err := scanner.Err()
+// processLine handles one JSON-RPC message: client responses are routed to
+// the pending channel, requests are dispatched to handle.
+func (s *Server) processLine(line []byte) {
+	// Peek to detect client responses vs requests.
+	var env struct {
+		ID     any             `json:"id"`
+		Method string          `json:"method"`
+		Result json.RawMessage `json:"result"`
+		Error  *RPCError       `json:"error"`
+	}
+
+	err := json.Unmarshal(line, &env)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "scanner error: %v\n", err)
-		os.Exit(1)
+		s.sendError(nil, -32700, "Parse error", err.Error())
+
+		return
+	}
+	// Route client response to pending channel (server-initiated request).
+	if env.Method == "" {
+		if chVal, ok := s.pending.Load(fmt.Sprint(env.ID)); ok {
+			if ch, ok := chVal.(chan rawResponse); ok {
+				ch <- rawResponse{Result: env.Result, Err: env.Error}
+			}
+		}
+
+		return
+	}
+
+	var req Request
+
+	err = json.Unmarshal(line, &req)
+	if err != nil {
+		s.sendError(nil, -32700, "Parse error", err.Error())
+
+		return
+	}
+
+	resp := s.handle(req)
+	if resp != nil {
+		s.writeJSON(resp)
 	}
 }
 
@@ -531,9 +551,21 @@ func (s *Server) sendToClient(method string, params any) (json.RawMessage, error
 
 		return r.Result, nil
 
-	case <-time.After(requestTimeout):
+	case <-time.After(requestTimeout()):
 		return nil, fmt.Errorf("%s: %w", method, errRequestTimeout)
 	}
+}
+
+// requestTimeout returns the timeout for server-initiated request round-trips.
+// Override with GREPFUNC_REQUEST_TIMEOUT (Go duration, e.g. "10s").
+func requestTimeout() time.Duration {
+	if v := os.Getenv("GREPFUNC_REQUEST_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+
+	return defaultRequestTimeout
 }
 
 // requestRoots requests the list of roots from the client and updates ProjectRoot.
@@ -773,48 +805,23 @@ func RelPath(abs string) string {
 // persistProjectRoot writes server.project_root into the project's memory store.
 // Called async on initialize so the AI sees the resolved root on memory() recall.
 func persistProjectRoot(root string) {
-	type entry struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-		At    string `json:"at"`
-	}
+	mem := readMemStore(root)
 
-	type store struct {
-		Entries []entry `json:"entries"`
-	}
+	filtered := mem.Entries[:0]
 
-	memPath := filepath.Join(root, ".llm", "memory.json")
-
-	// #nosec G304 -- memPath is derived from the locked project root
-	data, _ := os.ReadFile(memPath)
-
-	var memStore store
-
-	_ = json.Unmarshal(data, &memStore)
-
-	// Remove stale server.project_root entry
-	filtered := memStore.Entries[:0]
-
-	for _, e := range memStore.Entries {
+	for _, e := range mem.Entries {
 		if e.Key != "server.project_root" {
 			filtered = append(filtered, e)
 		}
 	}
 	// Prepend so it's first on recall
-	memStore.Entries = append([]entry{{
+	filtered = append([]memEntry{{
 		Key:   "server.project_root",
 		Value: root,
 		At:    time.Now().UTC().Format(time.RFC3339),
 	}}, filtered...)
 
-	_ = os.MkdirAll(filepath.Dir(memPath), dirPermPrivate)
-
-	out, err := json.MarshalIndent(memStore, "", "  ")
-	if err != nil {
-		return
-	}
-
-	_ = os.WriteFile(memPath, out, filePermPrivate)
+	writeMemStore(root, filtered)
 }
 
 // cachedRootFile returns the path to the persisted last-known project root.
@@ -888,49 +895,65 @@ func autoDiscover(root string) {
 		return
 	}
 
-	// Write to memory store (same format as memory tool)
-	type entry struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-		At    string `json:"at"`
-	}
-
-	type store struct {
-		Entries []entry `json:"entries"`
-	}
-
-	memPath := filepath.Join(root, ".llm", "memory.json")
-
-	// #nosec G304 -- memPath is derived from the locked project root
-	data, _ := os.ReadFile(memPath)
-
-	var memStore store
-
-	_ = json.Unmarshal(data, &memStore)
+	mem := readMemStore(root)
 
 	// Remove stale server.* entries before writing (dedup with persistProjectRoot)
-	filtered := memStore.Entries[:0]
+	filtered := mem.Entries[:0]
 
-	for _, e := range memStore.Entries {
+	for _, e := range mem.Entries {
 		if !strings.HasPrefix(e.Key, "server.") {
 			filtered = append(filtered, e)
 		}
 	}
 
-	memStore.Entries = filtered
-
 	now := time.Now().UTC().Format(time.RFC3339)
 	for k, v := range facts {
-		memStore.Entries = append([]entry{{Key: k, Value: v, At: now}}, memStore.Entries...)
+		filtered = append([]memEntry{{Key: k, Value: v, At: now}}, filtered...)
 	}
 
-	_ = os.MkdirAll(filepath.Dir(memPath), dirPermPrivate)
+	writeMemStore(root, filtered)
+}
 
-	out, err := json.MarshalIndent(memStore, "", "  ")
+// memEntry is one key/value record in the project's memory store.
+type memEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	At    string `json:"at"`
+}
+
+// memStore is the on-disk .llm/memory.json layout shared by server writers.
+type memStore struct {
+	Entries []memEntry `json:"entries"`
+}
+
+// memPathOf returns the memory store path for a project root.
+func memPathOf(root string) string {
+	return filepath.Join(root, ".llm", "memory.json")
+}
+
+// readMemStore loads the project's memory store, tolerating missing/corrupt files.
+func readMemStore(root string) memStore {
+	// #nosec G304 -- memPathOf is derived from the locked project root
+	data, _ := os.ReadFile(memPathOf(root))
+
+	var mem memStore
+
+	_ = json.Unmarshal(data, &mem)
+
+	return mem
+}
+
+// writeMemStore persists entries to the project's memory store.
+func writeMemStore(root string, entries []memEntry) {
+	out, err := json.MarshalIndent(memStore{Entries: entries}, "", "  ")
 	if err != nil {
 		return
 	}
 
+	memPath := memPathOf(root)
+	_ = os.MkdirAll(filepath.Dir(memPath), dirPermPrivate)
+
+	// #nosec G304 -- memPath is derived from the locked project root
 	_ = os.WriteFile(memPath, out, filePermPrivate)
 }
 
