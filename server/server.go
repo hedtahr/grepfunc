@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,9 +22,12 @@ const (
 	jsonrpcVersion        = "2.0"
 	scannerInitialBuf     = 1024 * 1024
 	defaultRequestTimeout = 3 * time.Second
+	defaultMaxLine        = 64 * 1024 * 1024
 	filePermPrivate       = 0o600
 	dirPermPrivate        = 0o700
 )
+
+var errLineTooLong = errors.New("JSON-RPC message exceeds maximum line length")
 
 var (
 	errClientResponse  = errors.New("client error response")
@@ -124,25 +128,95 @@ func (s *Server) Register(tool Tool, handler ToolHandler) {
 }
 
 // Run serves JSON-RPC messages from stdin until EOF. Messages are read as
-// whole lines with no length cap, so oversized tool outputs cannot crash the
-// server. Returns a non-nil error on any read failure (not on EOF).
+// whole lines with a generous but finite cap (see maxLineBytes), so neither
+// oversized tool outputs nor a newline-less flood can crash the server:
+// over-long lines get a parse error and are drained to restore framing
+// (bounded-line-reader pattern; cf. Go CVE-2023-45290, CWE-770).
+// Returns a non-nil error on any read failure (not on EOF).
 func (s *Server) Run() error {
 	reader := bufio.NewReaderSize(os.Stdin, scannerInitialBuf)
 
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := readBoundedLine(reader, maxLineBytes())
+
+		if errors.Is(err, errLineTooLong) {
+			// Overflow content is garbage, not a message: report and drain
+			// the remainder so framing is restored for subsequent messages.
+			s.sendError(nil, -32700, "Parse error", err.Error())
+
+			if derr := drainLine(reader); derr != nil && !errors.Is(derr, io.EOF) {
+				return fmt.Errorf("drain stdin: %w", derr)
+			}
+
+			continue
+		}
+
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("read stdin: %w", err)
+		}
+
 		if len(bytes.TrimSpace(line)) > 0 {
 			s.processLine(line)
 		}
 
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-
-			return fmt.Errorf("read stdin: %w", err)
+		if err != nil { // io.EOF
+			return nil
 		}
 	}
+}
+
+// readBoundedLine reads one line from reader, erroring with errLineTooLong
+// when the line exceeds limit bytes. Bounding prevents unbounded buffering
+// when a client sends data without a newline (unbounded-line DoS).
+func readBoundedLine(reader *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+
+	for {
+		frag, err := reader.ReadSlice('\n')
+		line = append(line, frag...)
+
+		if len(line) > limit {
+			return line, errLineTooLong
+		}
+
+		if err == nil {
+			return line, nil
+		}
+
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+
+		return line, err
+	}
+}
+
+// drainLine discards bytes up to and including the next newline.
+func drainLine(reader *bufio.Reader) error {
+	for {
+		_, err := reader.ReadSlice('\n')
+		if err == nil {
+			return nil
+		}
+
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+
+		return err
+	}
+}
+
+// maxLineBytes returns the per-message line cap. Override with
+// GREPFUNC_MAX_LINE (bytes, minimum 1MB enforced).
+func maxLineBytes() int {
+	if v := os.Getenv("GREPFUNC_MAX_LINE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1024*1024 {
+			return n
+		}
+	}
+
+	return defaultMaxLine
 }
 
 // processLine handles one JSON-RPC message: client responses are routed to
@@ -755,6 +829,12 @@ func BudgetResult(result *ToolCallResult, budget int) *ToolCallResult {
 }
 
 // reorientRoot re-pins ProjectRoot when an absolute path lies outside it.
+// Re-orientation is allowed only while the root is still unlocked (bootstrap).
+// A locked root is the server's trust boundary: tool arguments must never
+// relocate it — the MCP security literature lists silent sandbox re-pinning
+// via tool inputs as an escape vector (cf. arXiv:2503.23278, 2507.06250).
+// Roots from the client (initialize/roots/list) are handled separately and
+// may still move the boundary via the official roots mechanism.
 func reorientRoot(path string) {
 	cleanRoot := filepath.Clean(ProjectRoot)
 	underRoot := filepath.Clean(path) + string(filepath.Separator)
@@ -765,6 +845,10 @@ func reorientRoot(path string) {
 		return
 	}
 
+	if projectRootLocked {
+		return
+	}
+
 	if root := FindProjectRoot(filepath.Dir(path)); root != "" {
 		ProjectRoot = root
 		projectRootLocked = true
@@ -772,9 +856,7 @@ func reorientRoot(path string) {
 		return
 	}
 
-	if !projectRootLocked {
-		ProjectRoot = filepath.Dir(path)
-	}
+	ProjectRoot = filepath.Dir(path)
 }
 
 // RelPath strips the project root prefix from an absolute path for display.

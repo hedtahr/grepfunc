@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -289,6 +292,8 @@ func TestResolvePathReorientWithMarker(t *testing.T) {
 
 	filePath := filepath.Join(proj, "main.go")
 
+	// Locked: a path in another project must NOT re-pin the root (sandbox
+	// escape hardening). The path still resolves, but ProjectRoot stays.
 	ProjectRoot = testProjectRoot
 	projectRootLocked = true
 
@@ -297,12 +302,80 @@ func TestResolvePathReorientWithMarker(t *testing.T) {
 		t.Fatalf("ResolvePath = %q, want %q", got, filePath)
 	}
 
+	if ProjectRoot != testProjectRoot {
+		t.Errorf("ProjectRoot = %q, want %q (locked root must not be re-pinned)", ProjectRoot, testProjectRoot)
+	}
+
+	if !projectRootLocked {
+		t.Error("root should stay locked")
+	}
+
+	// Unlocked (bootstrap): re-orients to the marker project and locks.
+	ProjectRoot = testProjectRoot
+	projectRootLocked = false
+
+	got = ResolvePath(filePath)
+	if got != filePath {
+		t.Fatalf("ResolvePath (unlocked) = %q, want %q", got, filePath)
+	}
+
 	if ProjectRoot != proj {
 		t.Errorf("ProjectRoot = %q, want %q (re-oriented to marker project)", ProjectRoot, proj)
 	}
 
 	if !projectRootLocked {
 		t.Error("re-orientation to a marker project should lock the root")
+	}
+}
+
+func TestReadBoundedLine(t *testing.T) {
+	t.Run("short line", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("hello\n"))
+		line, err := readBoundedLine(r, 1024)
+		if err != nil || string(line) != "hello\n" {
+			t.Fatalf("got %q, %v", line, err)
+		}
+	})
+
+	t.Run("exceeds limit", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader(strings.Repeat("x", 2048) + "\n"))
+		_, err := readBoundedLine(r, 1024)
+		if !errors.Is(err, errLineTooLong) {
+			t.Fatalf("want errLineTooLong, got %v", err)
+		}
+	})
+
+	t.Run("no newline at EOF", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("last line"))
+		line, err := readBoundedLine(r, 1024)
+		if string(line) != "last line" {
+			t.Fatalf("got %q", line)
+		}
+
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("want io.EOF, got %v", err)
+		}
+	})
+
+	t.Run("fragment across buffer boundary", func(t *testing.T) {
+		payload := strings.Repeat("a", 100) + "\n"
+		r := bufio.NewReaderSize(strings.NewReader(payload), 16)
+		line, err := readBoundedLine(r, 1024)
+		if err != nil || string(line) != payload {
+			t.Fatalf("got %q, %v", line, err)
+		}
+	})
+}
+
+func TestMaxLineBytes(t *testing.T) {
+	t.Setenv("GREPFUNC_MAX_LINE", "8388608")
+	if got := maxLineBytes(); got != 8*1024*1024 {
+		t.Fatalf("maxLineBytes = %d", got)
+	}
+
+	t.Setenv("GREPFUNC_MAX_LINE", "10") // below floor: ignored
+	if got := maxLineBytes(); got != defaultMaxLine {
+		t.Fatalf("maxLineBytes = %d, want default", got)
 	}
 }
 
