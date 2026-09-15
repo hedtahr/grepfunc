@@ -46,6 +46,8 @@ var BatchTool = server.Tool{
 				Description: "Skip post-write validation (go vet / python ast)."},
 			"no_diff": {Type: jsonTypeBoolean, Items: nil,
 				Description: "Omit per-file diffs — summary only."},
+			"format": {Type: jsonTypeBoolean, Items: nil,
+				Description: "Run the language formatter (gofmt/rustfmt/prettier/ruff) over each result. Default off."},
 			propPath: {Type: jsonTypeString, Items: nil,
 				Description: "Root directory. Defaults to project root."},
 		},
@@ -60,6 +62,7 @@ type batchArgs struct {
 	FailFast     bool     `json:"fail_fast"`
 	SkipValidate bool     `json:"skip_validate"`
 	NoDiff       bool     `json:"no_diff"`
+	Format       bool     `json:"format"`
 	Path         string   `json:"path"`
 }
 
@@ -312,9 +315,6 @@ func processBatchFile(path string, args batchArgs) *fileResult {
 	}
 
 	content := original
-	if formatted, didFmt := preFormat(path, content, ext); didFmt {
-		content = formatted
-	}
 
 	results := detectOverlaps(computeResults(content, nil, args.Edits))
 
@@ -336,6 +336,12 @@ func processBatchFile(path string, args batchArgs) *fileResult {
 
 	if applied == 0 {
 		return nil
+	}
+
+	if args.Format {
+		if formatted, changed := formatContent(path, current, ext); changed {
+			current = formatted
+		}
 	}
 
 	if !args.NoDiff {

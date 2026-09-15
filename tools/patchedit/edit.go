@@ -50,11 +50,6 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	content := original
 
-	ext := filepath.Ext(args.Path)
-	if formatted, didFmt := preFormat(args.Path, content, ext); didFmt {
-		content = formatted
-	}
-
 	appendEOFInsert(args, content)
 
 	results := computeResults(content, args.Inserts, args.Edits)
@@ -65,16 +60,29 @@ func handleEditFile(raw json.RawMessage) (*server.ToolCallResult, error) {
 	if args.FailFast {
 		for _, r := range results {
 			if !r.Success {
-				return buildResponse(args.Path, original, content, content, results, true,
+				return buildResponse(args.Path, original, original, false, results, true,
 					args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, true, args.Terse)
 			}
 		}
 	}
 
+	current, reformatted := finalContent(args, content, results)
+
+	return buildResponse(args.Path, original, current, reformatted, results, args.DryRun,
+		args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false, args.Terse)
+}
+
+// finalContent applies the successful edits and, when format is set, runs the
+// formatter over the result. Matching always uses the on-disk bytes, so an
+// unformatted file is never silently rewritten.
+func finalContent(args *EditFileArgs, content []byte, results []editResult) ([]byte, bool) {
 	current := applyResults(content, results)
 
-	return buildResponse(args.Path, original, content, current, results, args.DryRun,
-		args.DiffContext, args.SkipValidate, showDiff, args.EchoLines, false, args.Terse)
+	if !args.Format {
+		return current, false
+	}
+
+	return formatContent(args.Path, current, filepath.Ext(args.Path))
 }
 
 func parseEditArgs(raw json.RawMessage) (*EditFileArgs, error) {
@@ -655,7 +663,7 @@ func selectReplacements(reps []replacement, contentLen int) []replacement {
 	return kept
 }
 
-func buildResponse(path string, original, formatted, current []byte, results []editResult, dryRun bool,
+func buildResponse(path string, original, current []byte, reformatted bool, results []editResult, dryRun bool,
 	diffCtx int, skipValidate, showDiff bool, echoLines int, failFastBlocked, terse bool) (*server.ToolCallResult, error) {
 	successCount, failCount := countResults(results)
 
@@ -669,7 +677,7 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 
 	var buf bytes.Buffer
 
-	writeHeader(&buf, path, original, formatted, successCount, len(results))
+	writeHeader(&buf, path, reformatted, successCount, len(results))
 
 	if dryRun {
 		writeEditTable(&buf, results, true)
@@ -685,7 +693,7 @@ func buildResponse(path string, original, formatted, current []byte, results []e
 	writeLowConfidence(&buf, results)
 
 	if showDiff {
-		writeDiffBlock(&buf, formatted, current, path, diffCtx)
+		writeDiffBlock(&buf, original, current, path, diffCtx)
 	}
 
 	if echoLines > 0 {
@@ -811,11 +819,11 @@ func joinErrors(results []editResult) string {
 	return strings.Join(errs, "; ")
 }
 
-func writeHeader(buf *bytes.Buffer, path string, original, formatted []byte, successCount, total int) {
+func writeHeader(buf *bytes.Buffer, path string, reformatted bool, successCount, total int) {
 	fmt.Fprintf(buf, "%s — %d/%d", server.RelPath(path), successCount, total)
 
-	if !bytes.Equal(original, formatted) {
-		buf.WriteString(" (pre-formatted)")
+	if reformatted {
+		buf.WriteString(" (reformatted)")
 	}
 
 	buf.WriteString("\n")

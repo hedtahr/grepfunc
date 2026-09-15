@@ -7,9 +7,10 @@ import (
 	"os/exec"
 )
 
-// preFormat runs the formatter before edits so the diff shows only intended changes.
+// formatContent runs the language formatter over in-memory content, so callers
+// can format what they are about to write rather than re-reading the file.
 // It returns the formatted content and whether formatting changed anything.
-func preFormat(path string, content []byte, ext string) ([]byte, bool) {
+func formatContent(path string, content []byte, ext string) ([]byte, bool) {
 	cmd := formatCommand(path, ext)
 	if cmd == nil {
 		return content, false
@@ -39,8 +40,8 @@ func preFormat(path string, content []byte, ext string) ([]byte, bool) {
 func formatCommand(path string, ext string) *exec.Cmd {
 	switch ext {
 	case ".go":
-		// #nosec G204 -- fixed formatter binary
-		return exec.CommandContext(context.Background(), "gofmt", path)
+		// #nosec G204 -- fixed formatter binary; reads content from stdin
+		return exec.CommandContext(context.Background(), "gofmt")
 	case ".rs":
 		// #nosec G204 -- fixed formatter binary
 		return exec.CommandContext(context.Background(), "rustfmt", "--edition", "2021")

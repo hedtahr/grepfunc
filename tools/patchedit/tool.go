@@ -24,7 +24,7 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "patch_file",
-	Description: "Edit a file: replace old_text→new_text (fuzzy matching) or insert at a line. Formats BEFORE edit.",
+	Description: "Edit a file: replace old_text→new_text (fuzzy) or insert at a line. Matches on-disk bytes; format=true gofmts the result.",
 	InputSchema: server.InputSchema{
 		Type:                 jsonTypeObject,
 		AdditionalProperties: false,
@@ -60,6 +60,8 @@ var Tool = server.Tool{
 				Description: "File whose contents are inserted at insert_line."},
 			"insert_line": {Type: jsonTypeInteger, Items: nil,
 				Description: "Line to insert before. Default 1."},
+			"format": {Type: jsonTypeBoolean, Items: nil,
+				Description: "Run the language formatter (gofmt/rustfmt/prettier/ruff) over the result. Default off."},
 		},
 		Required: []string{propPath},
 	},
@@ -97,6 +99,7 @@ type EditFileArgs struct {
 	Terse           bool   `json:"terse"`
 	InsertFile      string `json:"insert_file"`
 	InsertLine      int    `json:"insert_line"`
+	Format          bool   `json:"format"`
 }
 
 // MatchLoc describes one match region in the target file.
