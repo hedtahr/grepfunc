@@ -316,7 +316,7 @@ func processBatchFile(path string, args batchArgs) *fileResult {
 		content = formatted
 	}
 
-	results := computeResults(content, nil, args.Edits)
+	results := detectOverlaps(computeResults(content, nil, args.Edits))
 
 	fileRes := &fileResult{
 		rel: server.RelPath(path), total: len(args.Edits),

@@ -334,6 +334,14 @@ func renderBudgetTerse(arg args, page []FuncMatch, total, start, end int) string
 	return output
 }
 
+// ZeroMatchHint explains an empty result set: include globs match root-relative
+// paths and the default "*" searches known source extensions only.
+func ZeroMatchHint(include string) string {
+	return fmt.Sprintf("no matches \u2014 include %q matches paths relative to the search root; "+
+		"the default \"*\" searches known source extensions only "+
+		"(pass include, e.g. \"**/*.plsql\", to widen).\n", include)
+}
+
 // renderResults builds the text output for a page of matches.
 func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly bool) string {
 	var buf strings.Builder
@@ -357,6 +365,10 @@ func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly 
 	}
 
 	buf.WriteString("\n")
+
+	if total == 0 {
+		buf.WriteString(ZeroMatchHint(arg.Include))
+	}
 
 	if arg.GroupByFile {
 		renderGrouped(&buf, arg, page, namesOnly, includeBody, compact)

@@ -36,13 +36,14 @@ const (
 	stateBlockComment = 5
 )
 
-// CompilePattern wraps a user pattern into a regex.
+// CompilePattern wraps a user pattern into a regex. (?m) is always on so ^ and $
+// anchor lines, which is what matching file contents means to a caller.
 func CompilePattern(pattern string, caseSensitive bool) (*regexp.Regexp, error) {
 	if !caseSensitive {
 		pattern = "(?i)" + pattern
 	}
 
-	re, err := regexp.Compile(pattern)
+	re, err := regexp.Compile("(?m)" + pattern)
 	if err != nil {
 		return nil, fmt.Errorf("compile regex %q: %w", pattern, err)
 	}
@@ -322,7 +323,8 @@ func IsNonSourceExt(ext string) bool {
 		".swift", ".m", ".mm",
 		".lua", ".zig", ".nim", ".odin",
 		".sh", ".bash", ".zsh", ".fish",
-		".sql", ".graphql", ".proto",
+		".sql", ".plsql", ".pls", ".pks", ".pkb", ".prc", ".psql",
+		".graphql", ".proto",
 		".hs", ".ml", ".clj", ".cljs", ".edn", ".ex", ".exs",
 		".erl", ".hrl",
 		".vue", ".svelte",
@@ -336,8 +338,97 @@ func IsNonSourceExt(ext string) bool {
 }
 
 // MatchGlob matches a file path against a glob pattern with ** support.
-// ** matches zero or more directory components.
+// ** matches zero or more directory components; {a,b} sets are expanded.
 func MatchGlob(pattern, path string) bool {
+	if !strings.ContainsRune(pattern, '{') {
+		return matchGlob(pattern, path)
+	}
+
+	for _, candidate := range expandBraces(pattern) {
+		if matchGlob(candidate, path) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// maxGlobExpansions caps brace expansion so pathological patterns stay cheap.
+const maxGlobExpansions = 64
+
+// expandBraces expands {a,b} sets, e.g. **/*.{go,sql} → **/*.go, **/*.sql.
+// A group without a top-level comma stays literal, so matchGlob keeps seeing it.
+func expandBraces(pattern string) []string {
+	open := strings.IndexByte(pattern, '{')
+	if open < 0 {
+		return []string{pattern}
+	}
+
+	shut := matchingBrace(pattern, open)
+	if shut < 0 {
+		return []string{pattern}
+	}
+
+	alts := splitAlternates(pattern[open+1 : shut])
+	if len(alts) < 2 {
+		return []string{pattern}
+	}
+
+	var expanded []string
+
+	for _, alt := range alts {
+		expanded = append(expanded, expandBraces(pattern[:open]+alt+pattern[shut+1:])...)
+		if len(expanded) >= maxGlobExpansions {
+			return expanded[:maxGlobExpansions]
+		}
+	}
+
+	return expanded
+}
+
+func matchingBrace(pattern string, open int) int {
+	depth := 0
+
+	for i := open; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+
+	return -1
+}
+
+// splitAlternates splits on commas that are not inside a nested brace group.
+func splitAlternates(group string) []string {
+	var alts []string
+
+	depth, start := 0, 0
+
+	for i := 0; i < len(group); i++ {
+		switch group[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				alts = append(alts, group[start:i])
+
+				start = i + 1
+			}
+		}
+	}
+
+	return append(alts, group[start:])
+}
+
+func matchGlob(pattern, path string) bool {
 	// Fast path: no path separators in pattern → match against base name only
 	if !strings.ContainsAny(pattern, "/\\") {
 		matched, _ := filepath.Match(pattern, filepath.Base(path))

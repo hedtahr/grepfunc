@@ -38,7 +38,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_replace",
-	Description: "Regex find-and-replace across many files. Per-file summary + dry_run preview. Go regex ($1, $2 groups). Skips .gitignore'd dirs.",
+	Description: "Regex find-and-replace across files. Replacement supports $1 groups and \\n \\t escapes. dry_run preview. Skips dot-dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -92,7 +92,8 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		pat = "(?i)" + pat
 	}
 
-	pattern, err := regexp.Compile(pat)
+	// (?m) makes ^ and $ line anchors, which is what a file-content regex means here.
+	pattern, err := regexp.Compile("(?m)" + pat)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pattern: %w", err)
 	}
@@ -103,13 +104,15 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	walker := &replaceWalker{
-		re:          pattern,
-		glob:        glob,
-		maxFiles:    maxFiles,
-		dryRun:      req.DryRun,
-		replacement: req.Replacement,
-		filesWalked: 0,
-		results:     nil,
+		re:           pattern,
+		glob:         glob,
+		root:         root,
+		maxFiles:     maxFiles,
+		dryRun:       req.DryRun,
+		replacement:  unescapeReplacement(req.Replacement),
+		filesWalked:  0,
+		filesScanned: 0,
+		results:      nil,
 	}
 
 	walkErr := filepath.WalkDir(root, walker.walk)
@@ -119,7 +122,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	if len(walker.results) == 0 {
 		return &server.ToolCallResult{
-			Content: []server.ToolCallContent{{Type: "text", Text: noMatchMsgPrefix + req.Pattern}},
+			Content: []server.ToolCallContent{{Type: "text", Text: walker.noMatchMessage(req.Pattern)}},
 			IsError: false,
 		}, nil
 	}
@@ -156,13 +159,15 @@ func resolveScope(req args) (string, string, int) {
 }
 
 type replaceWalker struct {
-	re          *regexp.Regexp
-	glob        string
-	maxFiles    int
-	dryRun      bool
-	replacement string
-	filesWalked int
-	results     []result
+	re           *regexp.Regexp
+	glob         string
+	root         string
+	maxFiles     int
+	dryRun       bool
+	replacement  string
+	filesWalked  int
+	filesScanned int
+	results      []result
 }
 
 func (w *replaceWalker) walk(path string, entry fs.DirEntry, walkErr error) error {
@@ -186,6 +191,8 @@ func (w *replaceWalker) walk(path string, entry fs.DirEntry, walkErr error) erro
 		return nil
 	}
 
+	w.filesScanned++
+
 	return w.applyFile(path, entry)
 }
 
@@ -204,7 +211,7 @@ func (w *replaceWalker) applyFile(path string, entry fs.DirEntry) error {
 		return nil
 	}
 
-	if !grepfunc.MatchGlob(w.glob, path) {
+	if !grepfunc.MatchGlob(w.glob, w.relPath(path)) {
 		return nil
 	}
 
@@ -237,6 +244,66 @@ func (w *replaceWalker) applyFile(path string, entry fs.DirEntry) error {
 
 func skipDir(name string) bool {
 	return name == ".git" || name == "node_modules" || name == "vendor" || strings.HasPrefix(name, ".")
+}
+
+// relPath makes include globs match root-relative paths, so "postgres/query.sql"
+// works instead of needing "**/" to swallow the absolute path components.
+func (w *replaceWalker) relPath(path string) string {
+	rel, err := filepath.Rel(w.root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+
+	return filepath.ToSlash(rel)
+}
+
+// noMatchMessage reports why nothing changed: a bare "0 files matched" hides that
+// the include glob is matched against root-relative paths.
+func (w *replaceWalker) noMatchMessage(pattern string) string {
+	var output strings.Builder
+
+	fmt.Fprintf(&output, "%s%q in %d scanned files\n", noMatchMsgPrefix, pattern, w.filesScanned)
+	fmt.Fprintf(&output, "include: %q (matched relative to %s, e.g. \"**/sub/file.sql\")\n", w.glob, w.root)
+
+	return output.String()
+}
+
+// unescapeReplacement expands the escapes users expect in a replacement; Go's
+// ReplaceAll interprets $ captures only, so "\n" would land literally.
+func unescapeReplacement(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+
+	var out strings.Builder
+
+	out.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			out.WriteByte(s[i])
+
+			continue
+		}
+
+		i++
+
+		switch s[i] {
+		case 'n':
+			out.WriteByte('\n')
+		case 't':
+			out.WriteByte('\t')
+		case 'r':
+			out.WriteByte('\r')
+		case '\\':
+			out.WriteByte('\\')
+		default:
+			out.WriteByte('\\')
+			out.WriteByte(s[i])
+		}
+	}
+
+	return out.String()
 }
 
 func renderResults(results []result, dryRun bool) string {

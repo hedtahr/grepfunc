@@ -658,6 +658,26 @@ func FooBar() int { return Foo() + 1 }
 	}
 }
 
+func TestIsNonSourceExt(t *testing.T) {
+	tests := []struct {
+		ext  string
+		want bool
+	}{
+		{".go", false},
+		{".plsql", false},
+		{".pks", false},
+		{"", false},
+		{".md", true},
+		{".json", true},
+	}
+
+	for _, tt := range tests {
+		if got := IsNonSourceExt(tt.ext); got != tt.want {
+			t.Errorf("IsNonSourceExt(%q) = %v, want %v", tt.ext, got, tt.want)
+		}
+	}
+}
+
 func TestMatchGlob(t *testing.T) {
 	tests := []struct {
 		pattern, path string
@@ -690,6 +710,19 @@ func TestMatchGlob(t *testing.T) {
 		{globAllTestGo, "test/foo_test.go", true},
 		{globAllTestGo, "test/sub/foo_test.go", true},
 		{globAllTestGo, testSubFooGo, false},
+
+		// Brace sets
+		{"**/*.{go,sql}", "a/b/foo.go", true},
+		{"**/*.{go,sql}", "a/b/query.sql", true},
+		{"**/*.{go,sql}", "a/b/foo.rs", false},
+		{"*.{go,sql}", fooGo, true},
+		{"*.{go,sql}", "query.sql", true},
+		{"sub/*.{go,rs}", "sub/foo.go", true},
+		{"**/{internal,src}/*.go", "a/internal/x.go", true},
+		{"**/{internal,src}/*.go", "a/other/x.go", false},
+		// A brace group without a comma is literal, not a set
+		{"*{}.go", fooGo, false},
+		{"a{b}.go", "a{b}.go", true},
 	}
 
 	for _, tt := range tests {

@@ -423,6 +423,11 @@ func renderCountOnly(arg args, all []window, total int, scannedAll bool) *server
 	var buf strings.Builder
 
 	fmt.Fprintf(&buf, "%d%s matches for %q\n", total, suffix, arg.Pattern)
+
+	if total == 0 {
+		buf.WriteString(grepfunc.ZeroMatchHint(arg.Include))
+	}
+
 	buf.WriteString("```\n")
 
 	for _, file := range files {
@@ -444,6 +449,8 @@ func writeZeroMatches(buf *strings.Builder, arg args) {
 	} else {
 		fmt.Fprintf(buf, "0 matches for %q\n", arg.Pattern)
 	}
+
+	buf.WriteString(grepfunc.ZeroMatchHint(arg.Include))
 }
 
 // writeMatchHeader writes the summary line and leading whitespace.

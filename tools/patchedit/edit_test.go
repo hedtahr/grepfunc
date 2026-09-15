@@ -219,6 +219,24 @@ func TestMultiEditOffsetSafety(t *testing.T) {
 	}
 }
 
+// Regression: a replace_all result was applied from offsets computed against the
+// original content, so any other edit landing between its match regions shifted
+// the later matches — duplicating fragments and truncating neighbours.
+func TestReplaceAllWithInterveningEdit(t *testing.T) {
+	content := []byte("foo AAAAAAAAAAAAAAAAAAAA bar ------ foo\n")
+
+	edits := []EditOp{
+		{OldText: "foo", NewText: "FOO", Index: 1, ReplaceAll: true},
+		{OldText: "bar", NewText: "BARBARBAR", Index: 2, ReplaceAll: false},
+	}
+	results := detectOverlaps(computeResults(content, nil, edits))
+
+	want := "FOO AAAAAAAAAAAAAAAAAAAA BARBARBAR ------ FOO\n"
+	if got := string(applyResults(content, results)); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
 // Regression: matches whose text ends with a newline used to report
 // LineEnd one line too high.
 func TestLineEndWithTrailingNewline(t *testing.T) {

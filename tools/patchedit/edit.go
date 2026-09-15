@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
@@ -554,34 +553,30 @@ func extractContext(content []byte, loc MatchLoc, radius int) string {
 	return buf.String()
 }
 
+// replacement is one text splice at a fixed offset of the original content.
+type replacement struct {
+	start int
+	end   int
+	text  string
+}
+
+// applyReplacement splices one edit's matches into content.
 func applyReplacement(content []byte, result editResult) []byte {
 	if !result.Success || len(result.Matches) == 0 {
 		return content
 	}
-	// Apply in reverse order so earlier offsets stay valid (handles replace_all multi-match)
-	out := content
 
-	for _, v := range slices.Backward(result.Matches) {
-		loc := v
+	return applyReplacements(content, resultReplacements(result))
+}
 
-		oldLen := loc.EndOffset - loc.Offset
-		if oldLen < 0 || loc.Offset > len(out) {
-			continue
-		}
+func resultReplacements(result editResult) []replacement {
+	reps := make([]replacement, 0, len(result.Matches))
 
-		if loc.Offset+oldLen > len(out) {
-			oldLen = len(out) - loc.Offset
-		}
-
-		var buf bytes.Buffer
-
-		buf.Write(out[:loc.Offset])
-		buf.WriteString(result.NewText)
-		buf.Write(out[loc.Offset+oldLen:])
-		out = buf.Bytes()
+	for _, loc := range result.Matches {
+		reps = append(reps, replacement{start: loc.Offset, end: loc.EndOffset, text: result.NewText})
 	}
 
-	return out
+	return reps
 }
 
 func applyResults(content []byte, results []editResult) []byte {
@@ -591,36 +586,73 @@ func applyResults(content []byte, results []editResult) []byte {
 }
 
 func applySuccessful(content []byte, results []editResult) (int, []byte) {
-	toApply := make([]editResult, 0, len(results))
+	applied := 0
+	reps := make([]replacement, 0, len(results))
 
 	for _, r := range results {
-		if r.Success {
-			toApply = append(toApply, r)
+		if !r.Success {
+			continue
 		}
+
+		applied++
+		reps = append(reps, resultReplacements(r)...)
 	}
 
-	sortByMatchOffsetDesc(toApply)
-
-	current := content
-	for _, r := range toApply {
-		current = applyReplacement(current, r)
-	}
-
-	return len(toApply), current
+	return applied, applyReplacements(content, reps)
 }
 
-func sortByMatchOffsetDesc(results []editResult) {
-	sort.Slice(results, func(i, j int) bool {
-		return matchOffset(results[i]) > matchOffset(results[j])
-	})
-}
+// applyReplacements splices every match in one bottom-up pass. All offsets were
+// computed against content pre-edit, so per-result application makes the later
+// matches of a replace_all stale as soon as another edit lands between them.
+func applyReplacements(content []byte, reps []replacement) []byte {
+	sort.SliceStable(reps, func(i, j int) bool { return reps[i].start > reps[j].start })
 
-func matchOffset(r editResult) int {
-	if len(r.Matches) > 0 {
-		return r.Matches[0].Offset
+	kept := selectReplacements(reps, len(content))
+	if len(kept) == 0 {
+		return content
 	}
 
-	return 0
+	// Applied bottom-up: ascending order keeps same-offset splices in argument order.
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].start < kept[j].start })
+
+	size := len(content)
+	for _, rep := range kept {
+		size += len(rep.text) - (rep.end - rep.start)
+	}
+
+	out := make([]byte, 0, size)
+
+	prev := 0
+	for _, rep := range kept {
+		out = append(out, content[prev:rep.start]...)
+		out = append(out, rep.text...)
+
+		prev = rep.end
+	}
+
+	return append(out, content[prev:]...)
+}
+
+// selectReplacements keeps the highest-offset non-overlapping subset of reps
+// (sorted by descending start) and clamps ends to content length.
+func selectReplacements(reps []replacement, contentLen int) []replacement {
+	kept := make([]replacement, 0, len(reps))
+	limit := contentLen + 1
+
+	for _, rep := range reps {
+		if rep.start < 0 || rep.end < rep.start || rep.end > limit {
+			continue
+		}
+
+		if rep.end > contentLen {
+			rep.end = contentLen
+		}
+
+		kept = append(kept, rep)
+		limit = rep.start
+	}
+
+	return kept
 }
 
 func buildResponse(path string, original, formatted, current []byte, results []editResult, dryRun bool,
