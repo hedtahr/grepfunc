@@ -2,6 +2,7 @@ package grepfunc
 
 import (
 	"encoding/json"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -633,6 +634,42 @@ func TestCallArgumentsAreNotSymbols(t *testing.T) {
 func TestKotlinExtensionIsSignature(t *testing.T) {
 	if !IsFuncSig([]byte("fun List<String>.joinStrings(sep: String): String {")) {
 		t.Error("a fun-qualified extension must stay a signature")
+	}
+}
+
+// The jump scan must agree with the byte walk on every input, from every state.
+func TestScanLineAgreesWithDenseScan(t *testing.T) {
+	pieces := []string{"{", "}", "\"", "'", "`", "/", "*", "\\", "a", " ", "//", "/*", "*/", "=", "\n"}
+
+	random := rand.New(rand.NewPCG(1, 2))
+
+	states := []byte{stateCode, stateDoubleQuote, stateSingleQuote, stateBacktick, stateBlockComment, stateLineComment}
+
+	lines := make([][]byte, 0, 502)
+
+	for range 500 {
+		var buf strings.Builder
+
+		for range 1 + random.IntN(60) {
+			buf.WriteString(pieces[random.IntN(len(pieces))])
+		}
+
+		lines = append(lines, []byte(strings.ReplaceAll(buf.String(), "\n", "")))
+	}
+
+	// A dense line is long enough to trip the density switch.
+	lines = append(lines, []byte(strings.Repeat(`{"a":1}/*x*/`, 40)), []byte(strings.Repeat(`{"unterminated`, 30)))
+
+	for _, line := range lines {
+		for _, state := range states {
+			wantOpens, wantCloses, wantState := scanLineDense(line, 0, state, 0, 0)
+			gotOpens, gotCloses, gotState := scanLine(line, state)
+
+			if gotOpens != wantOpens || gotCloses != wantCloses || gotState != wantState {
+				t.Fatalf("line %q from state %d: jump=(%d,%d,%d) walk=(%d,%d,%d)",
+					line, state, gotOpens, gotCloses, gotState, wantOpens, wantCloses, wantState)
+			}
+		}
 	}
 }
 

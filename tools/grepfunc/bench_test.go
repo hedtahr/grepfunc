@@ -197,6 +197,119 @@ func BenchmarkSearchTreeNoMatchWarmCache(b *testing.B) {
 	}
 }
 
+// Evidence for staying on a byte loop instead of SIMD primitives: the per-call
+// cost dominates on the short lines real code is made of, and even on long lines a
+// single-needle vector search only beats the loop once its overhead is amortised.
+// The vector variants also cannot lex (they count braces inside strings/comments).
+func BenchmarkLineScanAlternatives(b *testing.B) {
+	shortLines := benchLines(2000, 10)
+
+	longLine := []byte(strings.Repeat("\tjson := map[string]any{\"k\": \"v\"}; ", 80))
+
+	const specials = "{}`\"'/"
+
+	open, closeB := []byte("{"), []byte("}")
+
+	b.Run("short/loop", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			braces := 0
+
+			for _, line := range shortLines {
+				o, c := braceDelta(line)
+				braces += o + c
+			}
+
+			if braces == 0 {
+				b.Fatal("no braces")
+			}
+		}
+	})
+
+	b.Run("short/count", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			braces := 0
+
+			for _, line := range shortLines {
+				braces += bytes.Count(line, open) + bytes.Count(line, closeB)
+			}
+
+			if braces == 0 {
+				b.Fatal("no braces")
+			}
+		}
+	})
+
+	b.Run("short/indexany", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			found := 0
+
+			for _, line := range shortLines {
+				for i := 0; i < len(line); {
+					idx := bytes.IndexAny(line[i:], specials)
+					if idx < 0 {
+						break
+					}
+
+					found++
+					i += idx + 1
+				}
+			}
+
+			if found == 0 {
+				b.Fatal("no specials")
+			}
+		}
+	})
+
+	b.Run("long/loop", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			if o, c := braceDelta(longLine); o+c == 0 {
+				b.Fatal("no braces")
+			}
+		}
+	})
+
+	b.Run("long/count", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			if bytes.Count(longLine, open)+bytes.Count(longLine, closeB) == 0 {
+				b.Fatal("no braces")
+			}
+		}
+	})
+
+	b.Run("long/indexany", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			found := 0
+
+			for i := 0; i < len(longLine); {
+				idx := bytes.IndexAny(longLine[i:], specials)
+				if idx < 0 {
+					break
+				}
+
+				found++
+				i += idx + 1
+			}
+
+			if found == 0 {
+				b.Fatal("no specials")
+			}
+		}
+	})
+}
+
 func BenchmarkMapBlockBoundaries(b *testing.B) {
 	lines := benchLines(2000, 10)
 
