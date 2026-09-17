@@ -3,11 +3,13 @@ package grepfunc
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // benchTree writes files×funcs Go-ish functions; every tenth body has a marker.
@@ -107,6 +109,94 @@ func BenchmarkSearchNamesTree(b *testing.B) {
 	}
 }
 
+// The scan-heavy case: every file is read and scanned, nothing matches.
+func BenchmarkSearchTreeNoMatch(b *testing.B) {
+	dir := b.TempDir()
+	benchTree(b, dir, 120, 30)
+
+	pattern := regexp.MustCompile(`no_such_symbol_anywhere`)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		results, err := Search(dir, "**/*.go", pattern, 50, IsFuncSig)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		if len(results) != 0 {
+			b.Fatal("unexpected match")
+		}
+	}
+}
+
+// ageTree back-dates every file so the read cache is allowed to hold it.
+func ageTree(tb testing.TB, dir string) {
+	tb.Helper()
+
+	old := time.Now().Add(-time.Hour)
+
+	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil //nolint:nilerr // best-effort ageing for the benchmark
+		}
+
+		return os.Chtimes(path, old, old)
+	})
+}
+
+// Repeat queries over an unchanged repo: the read cache should skip every read.
+func BenchmarkSearchTreeWarmCache(b *testing.B) {
+	dir := b.TempDir()
+	benchTree(b, dir, 120, 30)
+	ageTree(b, dir)
+
+	pattern := regexp.MustCompile(`marker hit`)
+
+	if _, err := Search(dir, "**/*.go", pattern, 50, IsFuncSig); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		results, err := Search(dir, "**/*.go", pattern, 50, IsFuncSig)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		if len(results) == 0 {
+			b.Fatal("no results")
+		}
+	}
+}
+
+// Full scans over an unchanged repo: the read cache is worth most here.
+func BenchmarkSearchTreeNoMatchWarmCache(b *testing.B) {
+	dir := b.TempDir()
+	benchTree(b, dir, 120, 30)
+	ageTree(b, dir)
+
+	pattern := regexp.MustCompile(`no_such_symbol_anywhere`)
+
+	if _, err := Search(dir, "**/*.go", pattern, 50, IsFuncSig); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		results, err := Search(dir, "**/*.go", pattern, 50, IsFuncSig)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		if len(results) != 0 {
+			b.Fatal("unexpected match")
+		}
+	}
+}
+
 func BenchmarkMapBlockBoundaries(b *testing.B) {
 	lines := benchLines(2000, 10)
 
@@ -194,13 +284,12 @@ func BenchmarkGoParserSymbols(b *testing.B) {
 // Symbol extraction through the brace scanner, on the same content.
 func BenchmarkBraceScannerSymbols(b *testing.B) {
 	data := benchGoData()
-	lines := toLines(data)
 	pattern := regexp.MustCompile(`marker hit`)
 
 	b.ReportAllocs()
 
 	for b.Loop() {
-		if len(braceBlocks(lines, pattern, 50, IsFuncSig, true)) == 0 {
+		if len(braceBlocks(data, pattern, 50, IsFuncSig, true)) == 0 {
 			b.Fatal("scanner produced no symbols")
 		}
 	}

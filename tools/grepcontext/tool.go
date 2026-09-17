@@ -335,7 +335,7 @@ func scanWindowFile(arg args, resolved, path, glob string, matcher *grepfunc.Glo
 		return nil, nil
 	}
 
-	data, err := os.ReadFile(path) // #nosec G122,G304 -- paths bounds-checked by server
+	data, err := grepfunc.ReadCachedFile(path, info.Size(), info.ModTime())
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hedtahr/grepfunc/server"
 )
@@ -23,8 +24,9 @@ const (
 	searchBothFactor = 2
 	initialStackCap  = 16
 
-	// searchWorkerCap bounds the parallel search pool. ripgrep's benchmarks
-	// show 4-8 workers is the Amdahl sweet spot; more adds contention.
+	// searchWorkerCap bounds the parallel search pool. Measured on 10 cores: 4 is the
+	// compromise — 2 is faster when a query truncates early (less in-flight
+	// over-fetch) but ~35% slower on full-tree scans, and 8 is worse on both.
 	searchWorkerCap = 4
 	// binarySniffLen is how many leading bytes are checked for NUL bytes to
 	// classify a file as binary (ripgrep's heuristic: fast, extension-agnostic).
@@ -53,6 +55,12 @@ func CompilePattern(pattern string, caseSensitive bool) (*regexp.Regexp, error) 
 	return re, nil
 }
 
+// fileJob is one candidate file handed to a worker.
+type fileJob struct {
+	path  string
+	entry fs.DirEntry
+}
+
 // SearchNames is Search without body materialisation: name, line range and size
 // are populated, Body is left empty. Use it when the caller only wants names.
 func SearchNames(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
@@ -74,11 +82,6 @@ func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 	matcher := CompileGlob(glob)
 	workers := min(searchWorkerCap, max(1, runtime.GOMAXPROCS(0)))
 
-	type fileJob struct {
-		path  string
-		entry fs.DirEntry
-	}
-
 	jobs := make(chan fileJob, workers*4)
 	results := make(chan []FuncMatch, workers*2)
 	errCh := make(chan error, workers)
@@ -86,10 +89,19 @@ func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 
 	var wg sync.WaitGroup
 
+	var budget atomic.Int64
+
 	for range workers {
 		wg.Go(func() {
 			for j := range jobs {
-				funcs, err := searchFile(root, j.path, matcher, j.entry, pattern, limit, sigFn, needBody)
+				// Workers share the match budget, so a search that has already filled
+				// the page stops reading instead of fetching a full page per worker.
+				remaining := limit - int(budget.Load())
+				if remaining <= 0 {
+					return
+				}
+
+				funcs, err := searchFile(root, j.path, matcher, j.entry, pattern, remaining, sigFn, needBody)
 				if err != nil {
 					errCh <- err
 
@@ -99,6 +111,8 @@ func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 				if len(funcs) == 0 {
 					continue
 				}
+
+				budget.Add(int64(len(funcs)))
 
 				for i := range funcs {
 					funcs[i].File = j.path
@@ -112,11 +126,11 @@ func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 	walkDone := make(chan struct{})
 	var walkErr error
 
-	gi := loadGitignore(root)
-
 	go func() {
 		defer close(jobs)
 		defer close(walkDone)
+
+		gi := loadGitignore(root)
 
 		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
@@ -260,8 +274,9 @@ func searchFile(root, path string, matcher *GlobMatcher, entry fs.DirEntry, patt
 		return nil, nil
 	}
 
-	// #nosec G304 -- path is bounds-checked by the server
-	data, err := os.ReadFile(path)
+	// #nosec G304 -- path is bounds-checked by the server; cached reads reuse the
+	// stat the walker already did, so repeated searches skip the read syscalls.
+	data, err := ReadCachedFile(path, info.Size(), info.ModTime())
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -697,24 +712,36 @@ func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, lim
 		return extractBlocksIndent(lines, pattern, limit, sigFn, needBody)
 	}
 
-	return braceBlocks(lines, pattern, limit, sigFn, needBody), nil
+	return braceBlocks(data, pattern, limit, sigFn, needBody), nil
 }
 
-// braceBlocks is the language-agnostic scanner: brace counting plus a per-line
-// match pass, with whole-block matching as the fallback for spanning patterns.
-func braceBlocks(lines [][]byte, pattern *regexp.Regexp, limit int,
+// braceBlocks is the language-agnostic scanner: brace counting plus a single
+// regexp pass over the file, with whole-block matching as the fallback for
+// spanning patterns that never match a line.
+func braceBlocks(data []byte, pattern *regexp.Regexp, limit int,
 	sigFn func([]byte) bool, needBody bool) []FuncMatch {
+	lines, starts := toLinesWithOffsets(data)
+	if len(lines) == 0 {
+		return nil
+	}
+
 	boundaries := mapBlockBoundaries(lines, sigFn)
 
-	// Find lines matching the pattern
+	// One engine pass beats a Match call per line, and it lets a pattern that
+	// contains a line break match at all. limit bounds the result, so match-all
+	// patterns cannot allocate per byte.
+	hits := pattern.FindAllIndex(data, limit)
+	if len(hits) == 0 {
+		return fallbackJoinedBlocks(lines, boundaries, pattern, limit, sigFn, needBody)
+	}
+
 	var results []FuncMatch
 
-	seen := make(map[int]bool) // dedup by func start line
+	seen := make(map[int]bool, 8) // dedup by func start line
+	lineIdx := 0
 
-	for lineIdx, line := range lines {
-		if !pattern.Match(line) {
-			continue
-		}
+	for _, hit := range hits {
+		lineIdx = lineAtOffset(starts, hit[0], lineIdx)
 
 		fnStart, ok := boundaries.Start(lineIdx)
 		if !ok || seen[fnStart] {
@@ -733,13 +760,34 @@ func braceBlocks(lines [][]byte, pattern *regexp.Regexp, limit int,
 		}
 	}
 
-	// A pattern that can match a line break never matches a single line, so the
-	// loop above finds nothing: retry against whole blocks.
-	if len(results) == 0 && canMatchNewline(pattern) {
-		return matchJoinedBlocks(lines, boundaries, pattern, limit, sigFn, needBody)
+	if len(results) == 0 {
+		return fallbackJoinedBlocks(lines, boundaries, pattern, limit, sigFn, needBody)
 	}
 
 	return results
+}
+
+// fallbackJoinedBlocks retries against whole blocks, which is the only way a
+// spanning pattern can match when no line inside a block matched.
+func fallbackJoinedBlocks(lines [][]byte, boundaries BlockBoundaries, pattern *regexp.Regexp,
+	limit int, sigFn func([]byte) bool, needBody bool) []FuncMatch {
+	if !canMatchNewline(pattern) {
+		return nil
+	}
+
+	return matchJoinedBlocks(lines, boundaries, pattern, limit, sigFn, needBody)
+}
+
+// lineAtOffset returns the line index containing byte offset, starting the search
+// at from: hits arrive in ascending order, so each lookup advances.
+func lineAtOffset(starts []int, offset, from int) int {
+	idx := from
+
+	for idx+1 < len(starts) && starts[idx+1] <= offset {
+		idx++
+	}
+
+	return idx
 }
 
 // matchJoinedBlocks matches pattern against each block's full text, so patterns
@@ -813,22 +861,37 @@ func isPythonExt(ext string) bool {
 
 // toLines splits data into lines, preserving the line content without trailing \n or \r.
 func toLines(data []byte) [][]byte {
-	var lines [][]byte
+	lines, _ := toLinesWithOffsets(data)
+
+	return lines
+}
+
+// toLinesWithOffsets splits data once, returning the lines and the byte offset each
+// starts at: the match pass needs both, and appending without a size hint made the
+// tables grow by repeated doubling on every scanned file.
+func toLinesWithOffsets(data []byte) ([][]byte, []int) {
+	count := bytes.Count(data, []byte{'\n'})
+
+	lines := make([][]byte, 0, count+1)
+	offsets := make([]int, 0, count+1)
 
 	start := 0
 
 	for i, b := range data {
 		if b == '\n' {
 			lines = append(lines, trimCR(data[start:i]))
+			offsets = append(offsets, start)
+
 			start = i + 1
 		}
 	}
 
 	if start < len(data) {
 		lines = append(lines, trimCR(data[start:]))
+		offsets = append(offsets, start)
 	}
 
-	return lines
+	return lines, offsets
 }
 
 func trimCR(b []byte) []byte {
@@ -932,20 +995,27 @@ func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) BlockBoundaries
 		// Detect new block signature (function, struct, class, etc). A line that
 		// starts inside a string or comment is text: detecting a signature there
 		// invents symbols from code samples embedded in raw strings.
-		if startsInCode && sigFn(line) && !awaitingKeywordSignature(stack) {
-			keyword := signatureKeyword(line)
+		pushed := false
 
-			if opens > 0 {
-				// Signature + opening brace on same line: bodyDepth = depth before signature
+		if startsInCode && sigFn(line) && !awaitingKeywordSignature(stack) {
+			trimmed := bytes.TrimSpace(line)
+			keyword := signatureKeyword(trimmed)
+
+			// The body opens on this line when the line nets a brace ("func Foo() {")
+			// or completes it ("func Foo() int { return 1 }"). A wrapped signature
+			// carrying a balanced pair ("func f(ch <-chan struct{},") does neither.
+			if depth > depthBefore || bytes.HasSuffix(trimmed, []byte("}")) {
 				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: depthBefore, keyword: keyword})
 			} else {
-				// Signature without brace; bodyDepth set when brace found
 				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: -1, keyword: keyword})
 			}
+
+			pushed = true
 		}
 
-		// If top of stack is waiting for its opening brace
-		if len(stack) > 0 && stack[len(stack)-1].bodyDepth < 0 && opens > 0 {
+		// A brace on a later line than its signature opens that body. On the
+		// signature line the push above already decided.
+		if !pushed && len(stack) > 0 && stack[len(stack)-1].bodyDepth < 0 && opens > 0 {
 			stack[len(stack)-1].bodyDepth = depthBefore
 		}
 

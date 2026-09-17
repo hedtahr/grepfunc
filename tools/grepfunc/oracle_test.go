@@ -71,7 +71,7 @@ func TestBraceScannerMatchesGoParser(t *testing.T) {
 			return nil // not valid Go right now (mid-edit), nothing to compare
 		}
 
-		scanned := braceBlocks(toLines(data), matchAll, oracleLimit, IsFuncSig, false)
+		scanned := braceBlocks(data, matchAll, oracleLimit, IsFuncSig, false)
 
 		files++
 
@@ -150,7 +150,7 @@ func TestGoParserAndScannerAgreeOnFixtures(t *testing.T) {
 				}
 			}
 
-			scanned := braceBlocks(toLines(data), pattern, oracleLimit, IsFuncSig, true)
+			scanned := braceBlocks(data, pattern, oracleLimit, IsFuncSig, true)
 
 			var fromScanner []symbolKey
 

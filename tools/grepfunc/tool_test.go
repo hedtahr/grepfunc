@@ -572,9 +572,7 @@ func TestMultilinePatternMatchesBlock(t *testing.T) {
 func TestWrappedSignatureKeepsFirstLine(t *testing.T) {
 	code := "package p\n\nfunc buildResponse(path string, a, b bool,\n\tc int, d bool) error {\n\treturn nil\n}\n"
 
-	lines := toLines([]byte(code))
-
-	funcs := braceBlocks(lines, regexp.MustCompile(`return`), 10, IsFuncSig, true)
+	funcs := braceBlocks([]byte(code), regexp.MustCompile(`return`), 10, IsFuncSig, true)
 	if len(funcs) != 1 {
 		t.Fatalf("got %d funcs, want 1", len(funcs))
 	}
@@ -621,7 +619,7 @@ func TestRawStringSamplesAreNotSymbols(t *testing.T) {
 func TestCallArgumentsAreNotSymbols(t *testing.T) {
 	code := "package p\n\nfunc sender(v int) {\n\tsend(Response{\n\t\tID: v,\n\t})\n}\n"
 
-	funcs := braceBlocks(toLines([]byte(code)), regexp.MustCompile(`(?s).`), 10, IsFuncSig, false)
+	funcs := braceBlocks([]byte(code), regexp.MustCompile(`(?s).`), 10, IsFuncSig, false)
 	if len(funcs) != 1 {
 		t.Fatalf("got %d symbols, want 1: %+v", len(funcs), funcs)
 	}
