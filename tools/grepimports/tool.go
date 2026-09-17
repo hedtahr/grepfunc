@@ -230,6 +230,8 @@ func handleSearchMode(arg fileArgs) (*server.ToolCallResult, error) {
 func scanImports(arg fileArgs) ([]fileImports, error) {
 	var results []fileImports
 
+	matcher := grepfunc.CompileGlob(arg.Include)
+
 	err := filepath.WalkDir(arg.Path, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -243,7 +245,7 @@ func scanImports(arg fileArgs) ([]fileImports, error) {
 			return nil
 		}
 
-		entries, err := scanImportFile(arg, path, entry)
+		entries, err := scanImportFile(arg, matcher, path, entry)
 		if err != nil {
 			return err
 		}
@@ -262,13 +264,13 @@ func scanImports(arg fileArgs) ([]fileImports, error) {
 }
 
 // scanImportFile parses one regular file's imports during a walk.
-func scanImportFile(arg fileArgs, path string, entry fs.DirEntry) ([]importEntry, error) {
+func scanImportFile(arg fileArgs, matcher *grepfunc.GlobMatcher, path string, entry fs.DirEntry) ([]importEntry, error) {
 	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
 		return nil, nil
 	}
 
 	rel, _ := filepath.Rel(arg.Path, path)
-	if !grepfunc.MatchGlob(arg.Include, rel) {
+	if !matcher.Match(rel) {
 		return nil, nil
 	}
 
@@ -286,7 +288,7 @@ func scanImportFile(arg fileArgs, path string, entry fs.DirEntry) ([]importEntry
 		return nil, nil
 	}
 
-	if arg.Include == "*" && grepfunc.IsNonSourceExt(ext) {
+	if matcher.IsDefault() && grepfunc.IsNonSourceExt(ext) {
 		return nil, nil
 	}
 

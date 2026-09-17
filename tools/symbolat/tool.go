@@ -118,17 +118,12 @@ func findBestMatch(lines [][]byte, lineIdx int) *candidate {
 	} {
 		boundaries := grepfunc.MapBlockBoundaries(lines, entry.sigFn)
 
-		startLine, ok := boundaries[lineIdx]
+		startLine, ok := boundaries.Start(lineIdx)
 		if !ok {
 			continue
 		}
-		// find end: max key mapping to this startLine
-		endLine := startLine
-		for k, v := range boundaries {
-			if v == startLine && k > endLine {
-				endLine = k
-			}
-		}
+
+		endLine := boundaries.EndLine(startLine)
 
 		c := &candidate{startLine: startLine, endLine: endLine, kind: entry.kind}
 		// prefer innermost (largest startLine)

@@ -233,8 +233,11 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		}
 	}
 
+	// Search stops the walk at the cap, so hitting it means the total is a floor.
+	truncated := fetchMax > 0 && len(all) >= fetchMax
+
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{Type: schemaText, Text: renderPaged(arg, all)}},
+		Content: []server.ToolCallContent{{Type: schemaText, Text: renderPaged(arg, all, truncated)}},
 		IsError: false,
 	}, nil
 }
@@ -282,13 +285,19 @@ func searchMatches(arg args, pattern *regexp.Regexp, fetchMax int) ([]FuncMatch,
 		return SearchBoth(arg.Path, arg.Include, pattern, fetchMax)
 	}
 
-	results, err := Search(arg.Path, arg.Include, pattern, fetchMax, IsFuncSig)
+	searchFn := Search
+	if arg.NamesOnly {
+		// Bodies are never rendered in names_only mode — don't build them.
+		searchFn = SearchNames
+	}
+
+	results, err := searchFn(arg.Path, arg.Include, pattern, fetchMax, IsFuncSig)
 
 	return results, nil, err
 }
 
 // renderPaged applies pagination and the token budget to the final output.
-func renderPaged(arg args, all []FuncMatch) string {
+func renderPaged(arg args, all []FuncMatch, truncated bool) string {
 	total := len(all)
 	start := min(arg.Offset, total)
 	end := min(start+arg.MaxResults, total)
@@ -297,12 +306,12 @@ func renderPaged(arg args, all []FuncMatch) string {
 	// When full bodies are requested and can't possibly fit the budget, render
 	// the names_only form directly — no point building output we'd throw away.
 	if arg.TokenBudget > 0 && arg.Body && !arg.NamesOnly && estBodyBytes(page) > arg.TokenBudget {
-		return renderBudgetTerse(arg, page, total, start, end)
+		return renderBudgetTerse(arg, page, total, start, end, truncated)
 	}
 
-	output := renderResults(arg, page, total, start, end, arg.NamesOnly)
+	output := renderResults(arg, page, total, start, end, arg.NamesOnly, truncated)
 	if arg.TokenBudget > 0 && len(output) > arg.TokenBudget && !arg.NamesOnly {
-		output = renderResults(arg, page, total, start, end, true)
+		output = renderResults(arg, page, total, start, end, true, truncated)
 		output = server.TruncateToBudget(output, arg.TokenBudget) + budgetTip(arg.TokenBudget)
 	}
 
@@ -326,8 +335,8 @@ func estBodyBytes(page []FuncMatch) int {
 }
 
 // renderBudgetTerse builds names_only output bounded by the token budget.
-func renderBudgetTerse(arg args, page []FuncMatch, total, start, end int) string {
-	output := renderResults(arg, page, total, start, end, true)
+func renderBudgetTerse(arg args, page []FuncMatch, total, start, end int, truncated bool) string {
+	output := renderResults(arg, page, total, start, end, true, truncated)
 	output = server.TruncateToBudget(output, arg.TokenBudget)
 	output += server.BudgetHint(arg.TokenBudget, "Bodies exceed the budget — shown as names_only. Use summary=true or a narrower pattern.")
 
@@ -335,15 +344,15 @@ func renderBudgetTerse(arg args, page []FuncMatch, total, start, end int) string
 }
 
 // ZeroMatchHint explains an empty result set: include globs match root-relative
-// paths and the default "*" searches known source extensions only.
+// paths and the default "*" skips known non-source formats.
 func ZeroMatchHint(include string) string {
 	return fmt.Sprintf("no matches \u2014 include %q matches paths relative to the search root; "+
-		"the default \"*\" searches known source extensions only "+
-		"(pass include, e.g. \"**/*.plsql\", to widen).\n", include)
+		"the default \"*\" skips known non-source formats (docs, data, lock files) "+
+		"(pass include, e.g. \"**/*.md\", to search them).\n", include)
 }
 
 // renderResults builds the text output for a page of matches.
-func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly bool) string {
+func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly, truncated bool) string {
 	var buf strings.Builder
 
 	includeBody := !namesOnly && arg.Body
@@ -354,14 +363,24 @@ func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly 
 		label = "function"
 	}
 
+	// A trailing "+" marks a floor: the walk stopped at the match cap.
+	marker := ""
+	if truncated {
+		marker = "+"
+	}
+
 	if compact {
-		fmt.Fprintf(&buf, "%d %ss %q", total, label, arg.Pattern)
+		fmt.Fprintf(&buf, "%d%s %ss %q", total, marker, label, arg.Pattern)
 	} else {
-		fmt.Fprintf(&buf, "%d %ss matching %q", total, label, arg.Pattern)
+		fmt.Fprintf(&buf, "%d%s %ss matching %q", total, marker, label, arg.Pattern)
 	}
 
 	if total > arg.MaxResults || arg.Offset > 0 {
 		fmt.Fprintf(&buf, " (showing %d\u2013%d)", start+1, end)
+	}
+
+	if truncated {
+		buf.WriteString(" (cap reached; totals may be incomplete)")
 	}
 
 	buf.WriteString("\n")

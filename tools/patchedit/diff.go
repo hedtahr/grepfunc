@@ -10,6 +10,15 @@ import (
 
 const defaultDiffCtx = 3
 
+// LCS cells are O(rows×cols) ints, so a large rewrite would allocate gigabytes.
+// Regions above the cap are split on identical lines and only oversized stretches
+// are summarised.
+const (
+	maxDiffCells       = 1 << 20
+	maxDiffSummaryRows = 5
+	syncWindow         = 256
+)
+
 func unifiedDiff(old, newContent []byte, path string, diffCtx int) string {
 	if bytes.Equal(old, newContent) {
 		return "(no changes)\n"
@@ -45,11 +54,95 @@ func unifiedDiff(old, newContent []byte, path string, diffCtx int) string {
 	oldLines = oldLines[lo:hiOld]
 	newLines = newLines[lo:hiNew]
 
-	ops := buildDiffOps(oldLines, newLines)
+	var ops []diffOp
+
+	if int64(len(oldLines))*int64(len(newLines)) > maxDiffCells {
+		ops = splitDiffOps(oldLines, newLines)
+	} else {
+		ops = buildDiffOps(oldLines, newLines)
+	}
 
 	writeDiffHunks(&buf, ops, ctx)
 
 	return buf.String()
+}
+
+// splitDiffOps diffs a large region by synchronising on identical lines, so each
+// stretch handed to the quadratic DP is small. A stretch with no identical line
+// within syncWindow is summarised: describing it exactly would mean the whole
+// region, which is the allocation this exists to avoid.
+func splitDiffOps(oldLines, newLines []string) []diffOp {
+	var ops []diffOp
+
+	i, j := 0, 0
+	for i < len(oldLines) || j < len(newLines) {
+		if i < len(oldLines) && j < len(newLines) && oldLines[i] == newLines[j] {
+			ops = append(ops, diffOp{' ', oldLines[i]})
+			i++
+			j++
+
+			continue
+		}
+
+		di, dj, found := findSync(oldLines, newLines, i, j)
+		if !found {
+			return append(ops, changeOps(oldLines[i:], newLines[j:])...)
+		}
+
+		ops = append(ops, changeOps(oldLines[i:i+di], newLines[j:j+dj])...)
+		i += di
+		j += dj
+	}
+
+	return ops
+}
+
+// findSync returns the offsets of the nearest pair of identical lines within
+// syncWindow, scanning forward in the old lines first.
+func findSync(oldLines, newLines []string, i, j int) (int, int, bool) {
+	limitOld := min(len(oldLines), i+syncWindow)
+	limitNew := min(len(newLines), j+syncWindow)
+
+	for di := 0; i+di < limitOld; di++ {
+		for dj := 0; j+dj < limitNew; dj++ {
+			if oldLines[i+di] == newLines[j+dj] {
+				return di, dj, true
+			}
+		}
+	}
+
+	return 0, 0, false
+}
+
+// changeOps diffs one stretch, or summarises it when the DP would be too large.
+func changeOps(oldLines, newLines []string) []diffOp {
+	if int64(len(oldLines))*int64(len(newLines)) <= maxDiffCells {
+		return buildDiffOps(oldLines, newLines)
+	}
+
+	ops := make([]diffOp, 0, maxDiffSummaryRows*2+2)
+
+	for i, line := range oldLines {
+		if i == maxDiffSummaryRows {
+			ops = append(ops, diffOp{'~', fmt.Sprintf("(%d more removed lines)", len(oldLines)-i)})
+
+			break
+		}
+
+		ops = append(ops, diffOp{'-', line})
+	}
+
+	for i, line := range newLines {
+		if i == maxDiffSummaryRows {
+			ops = append(ops, diffOp{'~', fmt.Sprintf("(%d more added lines)", len(newLines)-i)})
+
+			break
+		}
+
+		ops = append(ops, diffOp{'+', line})
+	}
+
+	return ops
 }
 
 func writeDiffHunks(buf *bytes.Buffer, ops []diffOp, ctx int) {
@@ -65,7 +158,9 @@ func writeDiffHunks(buf *bytes.Buffer, ops []diffOp, ctx int) {
 
 		for j := start; j < idx; j++ {
 			if ops[j].kind == ' ' {
-				buf.WriteString(" " + ops[j].text + "\n")
+				buf.WriteByte(' ')
+				buf.WriteString(ops[j].text)
+				buf.WriteByte('\n')
 			}
 		}
 
@@ -87,7 +182,8 @@ func writeDiffHunks(buf *bytes.Buffer, ops []diffOp, ctx int) {
 
 		for j := idx; j < hunkEnd; j++ {
 			buf.WriteByte(ops[j].kind)
-			buf.WriteString(ops[j].text + "\n")
+			buf.WriteString(ops[j].text)
+			buf.WriteByte('\n')
 		}
 
 		idx = hunkEnd

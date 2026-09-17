@@ -122,6 +122,15 @@ func TestExtractFuncName(t *testing.T) {
 	}
 }
 
+// startOf renders a block lookup as a plain int: -1 means no enclosing block.
+func startOf(boundaries BlockBoundaries, lineIdx int) int {
+	if start, ok := boundaries.Start(lineIdx); ok {
+		return start
+	}
+
+	return -1
+}
+
 func TestMapFuncBoundaries(t *testing.T) {
 	code := `package main
 
@@ -153,17 +162,8 @@ func baz() string {
 	// Lines 12-14: func baz → fnStart=12
 
 	check := func(lineIdx, expectedFnStart int) {
-		got, found := boundaries[lineIdx]
-		if expectedFnStart < 0 {
-			if found {
-				t.Errorf("line %d should have no function, got fnStart=%d", lineIdx, got)
-			}
-		} else {
-			if !found {
-				t.Errorf("line %d should map to fnStart=%d, got nothing", lineIdx, expectedFnStart)
-			} else if got != expectedFnStart {
-				t.Errorf("line %d mapped to fnStart=%d, want %d", lineIdx, got, expectedFnStart)
-			}
+		if got := startOf(boundaries, lineIdx); got != expectedFnStart {
+			t.Errorf("line %d mapped to fnStart=%d, want %d", lineIdx, got, expectedFnStart)
 		}
 	}
 
@@ -215,19 +215,19 @@ func outer() {
 	// Line 10: } → closes outer
 
 	// Inner function takes precedence
-	if got := boundaries[5]; got != 4 {
+	if got := startOf(boundaries, 5); got != 4 {
 		t.Errorf("deepest nested line (depth3) should map to fnStart=4, got %d", got)
 	}
 
-	if got := boundaries[7]; got != 3 {
+	if got := startOf(boundaries, 7); got != 3 {
 		t.Errorf("inner2 line should map to fnStart=3, got %d", got)
 	}
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("outer line should map to fnStart=2, got %d", got)
 	}
 
-	if got := boundaries[9]; got != 2 {
+	if got := startOf(boundaries, 9); got != 2 {
 		t.Errorf("more() line should map to fnStart=2, got %d", got)
 	}
 }
@@ -306,15 +306,15 @@ func Baz(a, b int) int { if a > b { return a } return b }
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("Foo start: got %d, want 2", got)
 	}
 
-	if got := boundaries[3]; got != 3 {
+	if got := startOf(boundaries, 3); got != 3 {
 		t.Errorf("Bar start: got %d, want 3", got)
 	}
 
-	if got := boundaries[4]; got != 4 {
+	if got := startOf(boundaries, 4); got != 4 {
 		t.Errorf("Baz start: got %d, want 4", got)
 	}
 }
@@ -335,19 +335,19 @@ func Bar(s string)
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("Foo sig line: got %d, want 2", got)
 	}
 
-	if got := boundaries[3]; got != 2 {
+	if got := startOf(boundaries, 3); got != 2 {
 		t.Errorf("Foo brace line: got %d, want 2", got)
 	}
 
-	if got := boundaries[4]; got != 2 {
+	if got := startOf(boundaries, 4); got != 2 {
 		t.Errorf("Foo body line: got %d, want 2", got)
 	}
 
-	if got := boundaries[5]; got != 2 {
+	if got := startOf(boundaries, 5); got != 2 {
 		t.Errorf("Foo close line: got %d, want 2", got)
 	}
 }
@@ -367,7 +367,7 @@ func (s *Server) HandleRequest(
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
 	for i := 2; i <= 8; i++ {
-		if got := boundaries[i]; got != 2 {
+		if got := startOf(boundaries, i); got != 2 {
 			t.Errorf("line %d: got %d, want 2", i, got)
 		}
 	}
@@ -387,11 +387,11 @@ func Process[T any](items []T, fn func(T) T) []T {
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("generic func start: got %d, want 2", got)
 	}
 
-	if got := boundaries[7]; got != 2 {
+	if got := startOf(boundaries, 7); got != 2 {
 		t.Errorf("generic func close: got %d, want 2", got)
 	}
 }
@@ -414,15 +414,15 @@ pub(crate) fn internal(value: u64) -> Option<u64> {
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("pub fn new: got %d, want 2", got)
 	}
 
-	if got := boundaries[6]; got != 6 {
+	if got := startOf(boundaries, 6); got != 6 {
 		t.Errorf("fn process: got %d, want 6", got)
 	}
 
-	if got := boundaries[10]; got != 10 {
+	if got := startOf(boundaries, 10); got != 10 {
 		t.Errorf("pub(crate) fn internal: got %d, want 10", got)
 	}
 }
@@ -441,11 +441,11 @@ func  Foo()  int  {
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("extra space func: got %d, want 2", got)
 	}
 
-	if got := boundaries[6]; got != 6 {
+	if got := startOf(boundaries, 6); got != 6 {
 		t.Errorf("tab-indented func: got %d, want 6", got)
 	}
 }
@@ -465,19 +465,19 @@ func TestNestedClosures(t *testing.T) {
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[0]; got != 0 {
+	if got := startOf(boundaries, 0); got != 0 {
 		t.Errorf("main: got %d, want 0", got)
 	}
 
-	if got := boundaries[1]; got != 1 {
+	if got := startOf(boundaries, 1); got != 1 {
 		t.Errorf("function(data): got %d, want 1", got)
 	}
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("function(err,result): got %d, want 2", got)
 	}
 
-	if got := boundaries[4]; got != 4 {
+	if got := startOf(boundaries, 4); got != 4 {
 		t.Errorf("function(): got %d, want 4", got)
 	}
 }
@@ -495,9 +495,146 @@ func Incomplete() {
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
 	for i := 2; i < len(lines); i++ {
-		if got := boundaries[i]; got != 2 {
+		if got := startOf(boundaries, i); got != 2 {
 			t.Errorf("line %d: got %d, want 2 (EOF fallback)", i, got)
 		}
+	}
+}
+
+// Multi-line patterns cannot match a single line, so they need the whole-block
+// fallback; single-line patterns must stay on the fast line loop.
+func TestCanMatchNewline(t *testing.T) {
+	tests := []struct {
+		pattern string
+		want    bool
+	}{
+		{`return nil`, false},
+		{`^func \w+\(`, false},
+		{`a|b`, false},
+		{`a{2,3}`, false},
+		{`[abc]`, false},
+		{`(?i)SELECT`, false},
+		{"if err != nil {\n\t\treturn err", true},
+		{`\s+`, true},
+		{`(?s).`, true},
+		{`[^x]`, true},
+		{`(?m)^\s*$`, true},
+	}
+
+	for _, tt := range tests {
+		re, err := regexp.Compile(tt.pattern)
+		if err != nil {
+			t.Fatalf("compile %q: %v", tt.pattern, err)
+		}
+
+		if got := canMatchNewline(re); got != tt.want {
+			t.Errorf("canMatchNewline(%q) = %v, want %v", tt.pattern, got, tt.want)
+		}
+	}
+}
+
+// Regression: a pattern containing a line break used to match nothing at all.
+func TestMultilinePatternMatchesBlock(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "multi.go")
+
+	code := "package test\n\nfunc Foo() error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+		"func Bar() error {\n\treturn nil\n}\n"
+
+	if err := os.WriteFile(filePath, []byte(code), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	multi := regexp.MustCompile("if err != nil {\n\t\treturn err")
+
+	funcs, err := extractBlocks(filePath, multi, 10, IsFuncSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(funcs) != 1 || funcs[0].Name != "Foo" {
+		t.Fatalf("multi-line pattern should match Foo, got %+v", funcs)
+	}
+
+	// Single-line patterns must keep working through the line loop.
+	single, err := extractBlocks(filePath, regexp.MustCompile(`return nil`), 10, IsFuncSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(single) != 2 {
+		t.Fatalf("single-line pattern should match both funcs, got %d", len(single))
+	}
+}
+
+// Regression: a wrapped signature's continuation line used to be taken for the
+// signature itself, shadowing the real line and producing a junk name like "int)".
+func TestWrappedSignatureKeepsFirstLine(t *testing.T) {
+	code := "package p\n\nfunc buildResponse(path string, a, b bool,\n\tc int, d bool) error {\n\treturn nil\n}\n"
+
+	lines := toLines([]byte(code))
+
+	funcs := braceBlocks(lines, regexp.MustCompile(`return`), 10, IsFuncSig, true)
+	if len(funcs) != 1 {
+		t.Fatalf("got %d funcs, want 1", len(funcs))
+	}
+
+	if funcs[0].Name != "buildResponse" || funcs[0].Line != 3 || funcs[0].EndLine != 6 {
+		t.Errorf("got %s L%d-%d, want buildResponse L3-6", funcs[0].Name, funcs[0].Line, funcs[0].EndLine)
+	}
+
+	if IsFuncSig([]byte("\tc int, d bool) error {")) {
+		t.Error("a continuation line must not look like a signature")
+	}
+}
+
+// Regression: a code sample inside a multi-line raw string used to be scanned as
+// code, inventing a symbol and letting its unbalanced brace swallow later funcs.
+func TestRawStringSamplesAreNotSymbols(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "samples.go")
+
+	code := "package p\n\n" +
+		"var sample = `\nfunc Phantom() {\n`\n\n" +
+		"func Real() int {\n\treturn 1\n}\n"
+
+	if err := os.WriteFile(filePath, []byte(code), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	funcs, err := extractBlocks(filePath, regexp.MustCompile(`(?s).`), 10, IsFuncSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(funcs) != 1 {
+		t.Fatalf("got %d symbols, want 1 (the sample is text): %+v", len(funcs), funcs)
+	}
+
+	if funcs[0].Name != "Real" || funcs[0].Line != 7 || funcs[0].EndLine != 9 {
+		t.Errorf("got %s L%d-%d, want Real L7-9", funcs[0].Name, funcs[0].Line, funcs[0].EndLine)
+	}
+}
+
+// A call whose arguments span lines is an expression, not a declaration: its
+// braces belong to a composite literal.
+func TestCallArgumentsAreNotSymbols(t *testing.T) {
+	code := "package p\n\nfunc sender(v int) {\n\tsend(Response{\n\t\tID: v,\n\t})\n}\n"
+
+	funcs := braceBlocks(toLines([]byte(code)), regexp.MustCompile(`(?s).`), 10, IsFuncSig, false)
+	if len(funcs) != 1 {
+		t.Fatalf("got %d symbols, want 1: %+v", len(funcs), funcs)
+	}
+
+	if funcs[0].Name != "sender" || funcs[0].Line != 3 || funcs[0].EndLine != 7 {
+		t.Errorf("got %s L%d-%d, want sender L3-7", funcs[0].Name, funcs[0].Line, funcs[0].EndLine)
+	}
+}
+
+// Kotlin extension functions are declarations even though the name is qualified.
+func TestKotlinExtensionIsSignature(t *testing.T) {
+	if !IsFuncSig([]byte("fun List<String>.joinStrings(sep: String): String {")) {
+		t.Error("a fun-qualified extension must stay a signature")
 	}
 }
 
@@ -539,11 +676,11 @@ func TestTemplateLiteralBraces(t *testing.T) {
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[0]; got != 0 {
+	if got := startOf(boundaries, 0); got != 0 {
 		t.Errorf("greet start: got %d, want 0", got)
 	}
 
-	if got := boundaries[3]; got != 0 {
+	if got := startOf(boundaries, 3); got != 0 {
 		t.Errorf("greet close: got %d, want 0", got)
 	}
 
@@ -568,15 +705,15 @@ func TestRustClosureChains(t *testing.T) {
 	lines := toLines([]byte(code))
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
-	if got := boundaries[0]; got != 0 {
+	if got := startOf(boundaries, 0); got != 0 {
 		t.Errorf("fn process: got %d, want 0", got)
 	}
 
-	if got := boundaries[2]; got != 2 {
+	if got := startOf(boundaries, 2); got != 2 {
 		t.Errorf("first closure: got %d, want 2", got)
 	}
 
-	if got := boundaries[5]; got != 5 {
+	if got := startOf(boundaries, 5); got != 5 {
 		t.Errorf("second closure: got %d, want 5", got)
 	}
 }
@@ -614,7 +751,7 @@ func TestCommentBlockInsideFunc(t *testing.T) {
 	boundaries := mapBlockBoundaries(lines, IsFuncSig)
 
 	for i := range lines {
-		if got := boundaries[i]; got != 0 {
+		if got := startOf(boundaries, i); got != 0 {
 			t.Errorf("line %d: got %d, want 0 (block comment with braces)", i, got)
 		}
 	}
@@ -663,17 +800,37 @@ func TestIsNonSourceExt(t *testing.T) {
 		ext  string
 		want bool
 	}{
+		// Source and unknown extensions are searched.
 		{".go", false},
 		{".plsql", false},
-		{".pks", false},
+		{".m4", false},
+		{".svg", false},
 		{"", false},
+		// Known non-source formats are skipped by default.
 		{".md", true},
 		{".json", true},
+		{".lock", true},
+		{".log", true},
 	}
 
 	for _, tt := range tests {
 		if got := IsNonSourceExt(tt.ext); got != tt.want {
 			t.Errorf("IsNonSourceExt(%q) = %v, want %v", tt.ext, got, tt.want)
+		}
+	}
+}
+
+// Text formats that used to be skipped as binary must be searchable on request.
+func TestIsBinaryExtExcludesText(t *testing.T) {
+	for _, ext := range []string{".svg", ".lock", ".sum"} {
+		if IsBinaryExt(ext) {
+			t.Errorf("IsBinaryExt(%q) = true, want false for a text format", ext)
+		}
+	}
+
+	for _, ext := range []string{".png", ".zip", ".so"} {
+		if !IsBinaryExt(ext) {
+			t.Errorf("IsBinaryExt(%q) = false, want true", ext)
 		}
 	}
 }
@@ -729,6 +886,10 @@ func TestMatchGlob(t *testing.T) {
 		got := MatchGlob(tt.pattern, tt.path)
 		if got != tt.want {
 			t.Errorf("matchGlob(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
+		}
+
+		if compiled := CompileGlob(tt.pattern).Match(tt.path); compiled != tt.want {
+			t.Errorf("CompileGlob(%q).Match(%q) = %v, want %v", tt.pattern, tt.path, compiled, tt.want)
 		}
 	}
 }
@@ -925,7 +1086,7 @@ func TestRenderPagedBudgetSinglePass(t *testing.T) {
 	}
 
 	// Tiny budget + body=true → names_only direct render, no bodies, hint present.
-	out := renderPaged(args{Pattern: "big", Path: "/p", MaxResults: 15, Body: true, TokenBudget: 100}, []FuncMatch{big})
+	out := renderPaged(args{Pattern: "big", Path: "/p", MaxResults: 15, Body: true, TokenBudget: 100}, []FuncMatch{big}, false)
 	if strings.Contains(out, "work()") {
 		t.Error("bodies must not be rendered when budget is tiny")
 	}
@@ -939,9 +1100,31 @@ func TestRenderPagedBudgetSinglePass(t *testing.T) {
 	}
 
 	// No budget → full bodies rendered.
-	full := renderPaged(args{Pattern: "big", Path: "/p", MaxResults: 15, Body: true}, []FuncMatch{big})
+	full := renderPaged(args{Pattern: "big", Path: "/p", MaxResults: 15, Body: true}, []FuncMatch{big}, false)
 	if !strings.Contains(full, "work()") {
 		t.Error("bodies must render when no budget is set")
+	}
+}
+
+// A truncated search must say so: the reported total is a floor, not a count.
+func TestRenderPagedMarksTruncatedTotals(t *testing.T) {
+	matches := make([]FuncMatch, 3)
+	for i := range matches {
+		matches[i] = FuncMatch{File: "/p/f.go", Line: i + 1, EndLine: i + 2, Name: "fn", Kind: "func", Body: "func fn() {}"}
+	}
+
+	out := renderPaged(args{Pattern: "fn", Path: "/p", MaxResults: 15}, matches, true)
+	if !strings.Contains(out, "3+ functions matching") {
+		t.Errorf("truncated total should carry a + marker: %q", out)
+	}
+
+	if !strings.Contains(out, "cap reached") {
+		t.Errorf("truncation should be explained: %q", out)
+	}
+
+	exact := renderPaged(args{Pattern: "fn", Path: "/p", MaxResults: 15}, matches, false)
+	if !strings.Contains(exact, "3 functions matching") || strings.Contains(exact, "cap reached") {
+		t.Errorf("exact total must not be marked: %q", exact)
 	}
 }
 
@@ -956,7 +1139,7 @@ func TestRenderPagedBudgetSigFallback(t *testing.T) {
 		})
 	}
 
-	out := renderPaged(args{Pattern: "symN", Path: "/p", MaxResults: 20, TokenBudget: 200}, all)
+	out := renderPaged(args{Pattern: "symN", Path: "/p", MaxResults: 20, TokenBudget: 200}, all, false)
 	if !strings.Contains(out, "names_only") {
 		t.Errorf("fallback hint should suggest names_only, got %q", out)
 	}

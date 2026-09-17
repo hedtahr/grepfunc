@@ -171,6 +171,7 @@ func compileRefPattern(arg args) (*regexp.Regexp, error) {
 
 type refWalker struct {
 	arg        args
+	matcher    *grepfunc.GlobMatcher
 	refRe      *regexp.Regexp
 	declRe     *regexp.Regexp
 	importRe   *regexp.Regexp
@@ -187,8 +188,9 @@ func newRefWalker(arg args, refRe *regexp.Regexp) *refWalker {
 	}
 
 	return &refWalker{
-		arg:   arg,
-		refRe: refRe,
+		arg:     arg,
+		matcher: grepfunc.CompileGlob(arg.Include),
+		refRe:   refRe,
 		declRe: regexp.MustCompile(flags +
 			`(?:(?:func|type|var|const|let|class|def|struct|interface|enum)\s+|func\s+\([^)]+\)\s+)` +
 			regexp.QuoteMeta(arg.Name) + `\b`),
@@ -262,7 +264,7 @@ func (w *refWalker) skipFile(path string, entry fs.DirEntry) bool {
 
 	rel, _ := filepath.Rel(w.arg.Path, path)
 
-	return !grepfunc.MatchGlob(w.arg.Include, rel)
+	return !w.matcher.Match(rel)
 }
 
 func (w *refWalker) unsupportedExt(ext string) bool {
@@ -274,7 +276,7 @@ func (w *refWalker) scanFile(path string, data []byte) {
 
 	var (
 		fileLinesBytes [][]byte
-		fileBoundaries map[int]int
+		fileBoundaries grepfunc.BlockBoundaries
 	)
 
 	if w.arg.Scope {
@@ -315,7 +317,7 @@ func (w *refWalker) scanFile(path string, data []byte) {
 		windowEnd := min(len(lines)-1, idx+ctx)
 
 		var siteScope string
-		if w.arg.Scope && fileBoundaries != nil {
+		if w.arg.Scope {
 			siteScope = grepfunc.EnclosingSymbol(fileLinesBytes, idx, fileBoundaries)
 		}
 

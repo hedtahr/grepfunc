@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"runtime"
 	"slices"
 	"strings"
@@ -51,12 +53,25 @@ func CompilePattern(pattern string, caseSensitive bool) (*regexp.Regexp, error) 
 	return re, nil
 }
 
+// SearchNames is Search without body materialisation: name, line range and size
+// are populated, Body is left empty. Use it when the caller only wants names.
+func SearchNames(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+	return search(root, glob, pattern, limit, sigFn, false)
+}
+
 // Search walks the directory tree, finds matching files, and extracts blocks.
 // sigFn detects whether a line starts a code block (function, struct, class, etc).
 // Traversal is parallelized over a small bounded worker pool (ripgrep-style:
 // Amdahl's law makes 4-8 workers optimal; more mostly adds contention).
 // Results are sorted by (file, line) so output stays deterministic.
 func Search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+	return search(root, glob, pattern, limit, sigFn, true)
+}
+
+// search is Search with an option to skip body materialisation: names-only
+// callers never read Body, so joining it is wasted work and memory.
+func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool, needBody bool) ([]FuncMatch, error) {
+	matcher := CompileGlob(glob)
 	workers := min(searchWorkerCap, max(1, runtime.GOMAXPROCS(0)))
 
 	type fileJob struct {
@@ -74,7 +89,7 @@ func Search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 	for range workers {
 		wg.Go(func() {
 			for j := range jobs {
-				funcs, err := searchFile(root, j.path, glob, j.entry, pattern, limit, sigFn)
+				funcs, err := searchFile(root, j.path, matcher, j.entry, pattern, limit, sigFn, needBody)
 				if err != nil {
 					errCh <- err
 
@@ -215,15 +230,15 @@ func isSkippableDir(base string) bool {
 }
 
 // searchFile extracts matching blocks from one regular file during a walk.
-func searchFile(root, path, glob string, entry fs.DirEntry, pattern *regexp.Regexp,
-	remaining int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+func searchFile(root, path string, matcher *GlobMatcher, entry fs.DirEntry, pattern *regexp.Regexp,
+	remaining int, sigFn func([]byte) bool, needBody bool) ([]FuncMatch, error) {
 	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
 		return nil, nil
 	}
 
 	rel, _ := filepath.Rel(root, path)
 
-	if !MatchGlob(glob, rel) {
+	if !matcher.Match(rel) {
 		return nil, nil
 	}
 
@@ -240,8 +255,8 @@ func searchFile(root, path, glob string, entry fs.DirEntry, pattern *regexp.Rege
 	if IsBinaryExt(ext) {
 		return nil, nil
 	}
-	// When glob is default "*", skip known non-source files
-	if glob == "*" && IsNonSourceExt(ext) {
+	// When the glob is the unrestricted default, extension filtering applies.
+	if matcher.IsDefault() && IsNonSourceExt(ext) {
 		return nil, nil
 	}
 
@@ -256,7 +271,7 @@ func searchFile(root, path, glob string, entry fs.DirEntry, pattern *regexp.Rege
 		return nil, nil
 	}
 
-	return extractBlocksData(path, data, pattern, remaining, sigFn)
+	return extractBlocksData(path, data, pattern, remaining, sigFn, needBody)
 }
 
 // SearchBoth finds funcs and types in a single walk.
@@ -289,52 +304,46 @@ func SearchBoth(root, glob string, pattern *regexp.Regexp, limit int) ([]FuncMat
 }
 
 // IsBinaryExt reports whether ext is a known binary or archive file extension.
+// Text formats that are merely uninteresting (.svg, .lock, .sum) are not binary:
+// IsNonSourceExt skips those by default while leaving them searchable on request.
 func IsBinaryExt(ext string) bool {
 	switch ext {
 	case ".exe", ".dll", ".so", ".dylib", ".a", ".o", ".obj",
 		".class", ".jar", ".war", ".ear",
 		".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
-		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
 		".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv",
 		".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 		".ttf", ".otf", ".woff", ".woff2",
-		".bin", ".dat", ".db", ".sqlite", ".sqlite3",
-		".lock", ".sum":
+		".bin", ".dat", ".db", ".sqlite", ".sqlite3":
 		return true
 	}
 
 	return false
 }
 
-// IsNonSourceExt skips known non-code file types when no include glob given.
-// Files with no extension (e.g. Makefile, Dockerfile) are kept.
+// IsNonSourceExt reports whether ext is a known non-source format — docs, data,
+// config, lock files — that searches skip unless an include glob asks for them.
+// It is deliberately a denylist: an allowlist silently hides every language the
+// tool has not heard of (a .plsql file used to look empty). Files with no
+// extension (Makefile, Dockerfile, LICENSE) are searched.
 func IsNonSourceExt(ext string) bool {
 	if ext == "" {
 		return false
 	}
 
 	switch ext {
-	case ".go", ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
-		".py", ".pyi", ".pyx",
-		".java", ".kt", ".kts", ".scala", ".groovy",
-		".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh",
-		".cs", ".fs", ".vb",
-		".rb", ".php", ".pl", ".pm",
-		".swift", ".m", ".mm",
-		".lua", ".zig", ".nim", ".odin",
-		".sh", ".bash", ".zsh", ".fish",
-		".sql", ".plsql", ".pls", ".pks", ".pkb", ".prc", ".psql",
-		".graphql", ".proto",
-		".hs", ".ml", ".clj", ".cljs", ".edn", ".ex", ".exs",
-		".erl", ".hrl",
-		".vue", ".svelte",
-		".tf", ".hcl",
-		".r", ".R",
-		".dart":
-		return false
+	case ".md", ".markdown", ".mdx", ".rst", ".adoc", ".asciidoc",
+		".txt", ".org", ".texi",
+		".json", ".jsonc", ".json5", ".ipynb",
+		".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".env",
+		".csv", ".tsv", ".ndjson",
+		".lock", ".sum",
+		".log", ".map", ".snap":
+		return true
 	}
 
-	return true
+	return false
 }
 
 // MatchGlob matches a file path against a glob pattern with ** support.
@@ -354,7 +363,10 @@ func MatchGlob(pattern, path string) bool {
 }
 
 // maxGlobExpansions caps brace expansion so pathological patterns stay cheap.
-const maxGlobExpansions = 64
+const (
+	maxGlobExpansions = 64
+	starStar          = "**"
+)
 
 // expandBraces expands {a,b} sets, e.g. **/*.{go,sql} → **/*.go, **/*.sql.
 // A group without a top-level comma stays literal, so matchGlob keeps seeing it.
@@ -443,6 +455,182 @@ func matchGlob(pattern, path string) bool {
 	return matchParts(patParts, pathParts)
 }
 
+// GlobMatcher matches root-relative paths against one compiled glob. Compile it
+// once per search: Match walks the path in place, so a per-file call allocates
+// nothing, where MatchGlob re-splits pattern and path every time.
+type GlobMatcher struct {
+	pattern string
+	alts    []globAlt
+}
+
+type globAlt struct {
+	parts []globPart
+	base  bool // pattern has no separator: match the base name only
+}
+
+// globPart is one compiled path component of a glob.
+type globPart struct {
+	text  string
+	plain bool // no ** and no [] \ escapes: match without filepath.Match
+	spans bool // "**" spans zero or more components
+}
+
+// CompileGlob precompiles pattern (brace sets included) for repeated matching.
+func CompileGlob(pattern string) *GlobMatcher {
+	candidates := expandBraces(pattern)
+
+	matcher := &GlobMatcher{pattern: pattern, alts: make([]globAlt, 0, len(candidates))}
+
+	for _, candidate := range candidates {
+		norm := strings.TrimPrefix(filepath.ToSlash(candidate), "./")
+		texts := splitPath(norm)
+		parts := make([]globPart, len(texts))
+
+		for i, text := range texts {
+			parts[i] = globPart{
+				text:  text,
+				plain: !strings.ContainsAny(text, "[\\"),
+				spans: text == starStar,
+			}
+		}
+
+		matcher.alts = append(matcher.alts, globAlt{
+			parts: parts, base: !strings.ContainsRune(norm, '/'),
+		})
+	}
+
+	return matcher
+}
+
+// IsDefault reports whether the matcher came from the unrestricted "*" pattern,
+// which is when callers apply their source-extension filtering.
+func (m *GlobMatcher) IsDefault() bool {
+	return m != nil && m.pattern == "*"
+}
+
+// Match reports whether path (root-relative) matches any compiled alternative.
+func (m *GlobMatcher) Match(path string) bool {
+	if m == nil {
+		return false
+	}
+
+	for i := range m.alts {
+		if m.alts[i].match(path) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (a *globAlt) match(path string) bool {
+	path = strings.TrimPrefix(filepath.ToSlash(path), "./")
+
+	if a.base {
+		name := path
+		if idx := strings.LastIndexByte(path, '/'); idx >= 0 {
+			name = path[idx+1:]
+		}
+
+		return matchComponent(a.parts[0], name)
+	}
+
+	if path == "" || path == "." {
+		return len(a.parts) == 0
+	}
+
+	return matchPartsFrom(a.parts, path, 0)
+}
+
+// matchPartsFrom matches pattern parts against the path's components starting at
+// byte offset ofs, without splitting the path.
+func matchPartsFrom(parts []globPart, path string, ofs int) bool {
+	if len(parts) == 0 {
+		return ofs >= len(path)
+	}
+
+	if parts[0].spans { // ** spans zero or more components
+		if matchPartsFrom(parts[1:], path, ofs) {
+			return true
+		}
+
+		for ofs < len(path) {
+			ofs = nextComponent(path, ofs)
+			if matchPartsFrom(parts[1:], path, ofs) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	if ofs >= len(path) {
+		return false
+	}
+
+	if !matchComponent(parts[0], path[ofs:componentEnd(path, ofs)]) {
+		return false
+	}
+
+	return matchPartsFrom(parts[1:], path, nextComponent(path, ofs))
+}
+
+func matchComponent(part globPart, comp string) bool {
+	if !part.plain {
+		matched, _ := filepath.Match(part.text, comp)
+
+		return matched
+	}
+
+	return matchSimple(part.text, comp)
+}
+
+// matchSimple matches a component made only of literals, '*' and '?', greedily
+// backtracking on '*', the way filepath.Match would but without allocating or
+// scanning the pattern twice.
+func matchSimple(pattern, name string) bool {
+	p, n := 0, 0
+	star, mark := -1, 0
+
+	for n < len(name) {
+		switch {
+		case p < len(pattern) && (pattern[p] == name[n] || pattern[p] == '?'):
+			p++
+			n++
+		case p < len(pattern) && pattern[p] == '*':
+			star, mark = p, n
+			p++
+		case star >= 0:
+			p, mark = star+1, mark+1
+			n = mark
+		default:
+			return false
+		}
+	}
+
+	for p < len(pattern) && pattern[p] == '*' {
+		p++
+	}
+
+	return p == len(pattern)
+}
+
+func nextComponent(path string, ofs int) int {
+	if idx := strings.IndexByte(path[ofs:], '/'); idx >= 0 {
+		return ofs + idx + 1
+	}
+
+	return len(path)
+}
+
+func componentEnd(path string, ofs int) int {
+	if idx := strings.IndexByte(path[ofs:], '/'); idx >= 0 {
+		return ofs + idx
+	}
+
+	return len(path)
+}
+
 func splitPath(path string) []string {
 	path = strings.TrimPrefix(filepath.ToSlash(path), "./")
 	if path == "" || path == "." {
@@ -459,7 +647,7 @@ func matchParts(pat, path []string) bool {
 
 	part := pat[0]
 
-	if part == "**" {
+	if part == starStar {
 		// ** matches zero or more path components
 		for i := 0; i <= len(path); i++ {
 			if matchParts(pat[1:], path[i:]) {
@@ -489,21 +677,33 @@ func extractBlocks(filePath string, pattern *regexp.Regexp, limit int, sigFn fun
 		return nil, fmt.Errorf("read %s: %w", filePath, err)
 	}
 
-	return extractBlocksData(filePath, data, pattern, limit, sigFn)
+	return extractBlocksData(filePath, data, pattern, limit, sigFn, true)
 }
 
 // extractBlocksData scans an already-read file's contents for blocks matching
 // pattern, avoiding a second read when the caller sniffed the file first.
-func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, limit int, sigFn func([]byte) bool) ([]FuncMatch, error) {
+func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, limit int,
+	sigFn func([]byte) bool, needBody bool) ([]FuncMatch, error) {
 	lines := toLines(data)
 	if len(lines) == 0 {
 		return nil, nil
 	}
 
+	// .go symbol extraction stays on the brace scanner: go/parser is 4x slower and
+	// 40x more allocation-heavy (BenchmarkGoParserSymbols vs BraceScannerSymbols),
+	// and TestBraceScannerMatchesGoParser shows the two agree on real Go files.
+	// parseGoSymbols is kept as that oracle.
 	if isPythonExt(strings.ToLower(filepath.Ext(filePath))) {
-		return extractBlocksIndent(lines, pattern, limit, sigFn)
+		return extractBlocksIndent(lines, pattern, limit, sigFn, needBody)
 	}
 
+	return braceBlocks(lines, pattern, limit, sigFn, needBody), nil
+}
+
+// braceBlocks is the language-agnostic scanner: brace counting plus a per-line
+// match pass, with whole-block matching as the fallback for spanning patterns.
+func braceBlocks(lines [][]byte, pattern *regexp.Regexp, limit int,
+	sigFn func([]byte) bool, needBody bool) []FuncMatch {
 	boundaries := mapBlockBoundaries(lines, sigFn)
 
 	// Find lines matching the pattern
@@ -516,7 +716,7 @@ func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, lim
 			continue
 		}
 
-		fnStart, ok := boundaries[lineIdx]
+		fnStart, ok := boundaries.Start(lineIdx)
 		if !ok || seen[fnStart] {
 			continue
 		}
@@ -527,13 +727,83 @@ func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, lim
 
 		seen[fnStart] = true
 
-		results = append(results, *buildFuncMatch(lines, fnStart))
+		results = append(results, *buildFuncMatch(lines, fnStart, boundaries.EndLine(fnStart), needBody))
 		if len(results) >= limit {
 			break
 		}
 	}
 
-	return results, nil
+	// A pattern that can match a line break never matches a single line, so the
+	// loop above finds nothing: retry against whole blocks.
+	if len(results) == 0 && canMatchNewline(pattern) {
+		return matchJoinedBlocks(lines, boundaries, pattern, limit, sigFn, needBody)
+	}
+
+	return results
+}
+
+// matchJoinedBlocks matches pattern against each block's full text, so patterns
+// containing a line break can match. Slower than the line loop (one join per
+// block), which is why it is only used as a fallback.
+func matchJoinedBlocks(lines [][]byte, boundaries BlockBoundaries, pattern *regexp.Regexp,
+	limit int, sigFn func([]byte) bool, needBody bool) []FuncMatch {
+	var results []FuncMatch
+
+	for lineIdx := range lines {
+		if !boundaries.IsBlockStart(lineIdx) || !sigFn(lines[lineIdx]) {
+			continue
+		}
+
+		if !pattern.MatchString(joinBlock(lines, lineIdx, boundaries.EndLine(lineIdx))) {
+			continue
+		}
+
+		results = append(results, *buildFuncMatch(lines, lineIdx, boundaries.EndLine(lineIdx), needBody))
+		if len(results) >= limit {
+			break
+		}
+	}
+
+	return results
+}
+
+// canMatchNewline reports whether re can match a line break. Patterns that cannot
+// are matched line by line; the rest fall back to whole-block matching. Anything
+// unresolvable takes the complete (slower) path.
+func canMatchNewline(re *regexp.Regexp) bool {
+	parsed, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil {
+		return true
+	}
+
+	return regexMatchesNewline(parsed)
+}
+
+func regexMatchesNewline(node *syntax.Regexp) bool {
+	switch node.Op {
+	case syntax.OpLiteral:
+		return slices.Contains(node.Rune, '\n')
+	case syntax.OpCharClass:
+		for i := 0; i+1 < len(node.Rune); i += 2 {
+			if node.Rune[i] <= '\n' && '\n' <= node.Rune[i+1] {
+				return true
+			}
+		}
+
+		return false
+	case syntax.OpAnyChar:
+		return true
+	case syntax.OpAnyCharNotNL:
+		return false
+	}
+
+	for _, sub := range node.Sub {
+		if regexMatchesNewline(sub) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isPythonExt reports whether ext belongs to a Python source file.
@@ -571,35 +841,106 @@ func trimCR(b []byte) []byte {
 
 // fnEntry tracks a function being built during the scan.
 type fnEntry struct {
-	startLine int // signature line index
-	bodyDepth int // brace depth just before opening brace (-1 if not yet found)
+	startLine int  // signature line index
+	bodyDepth int  // brace depth just before opening brace (-1 if not yet found)
+	keyword   bool // signature carried a func/def/fn keyword
+}
+
+// BlockBoundaries maps every line index to the start line of the innermost block
+// containing it, or NoBlock. Slices (not maps) keep lookups O(1) and cheap: the
+// map version hashed every line of every scanned file.
+type BlockBoundaries struct {
+	starts []int32
+	ends   []int32 // set on block-start lines: that block's last line
+}
+
+// NoBlock marks a line that is not inside any block.
+const NoBlock int32 = -1
+
+// Start returns the start line of the block enclosing lineIdx.
+func (b BlockBoundaries) Start(lineIdx int) (int, bool) {
+	if lineIdx < 0 || lineIdx >= len(b.starts) || b.starts[lineIdx] == NoBlock {
+		return 0, false
+	}
+
+	return int(b.starts[lineIdx]), true
+}
+
+// IsBlockStart reports whether lineIdx begins a block rather than falling inside one.
+func (b BlockBoundaries) IsBlockStart(lineIdx int) bool {
+	if lineIdx < 0 || lineIdx >= len(b.starts) {
+		return false
+	}
+
+	return int(b.starts[lineIdx]) == lineIdx
+}
+
+// EndLine returns the last line index belonging to the block at startLine.
+func (b BlockBoundaries) EndLine(startLine int) int {
+	if startLine < 0 || startLine >= len(b.ends) || b.ends[startLine] == NoBlock {
+		return startLine
+	}
+
+	return int(b.ends[startLine])
+}
+
+// Empty reports whether no lines were mapped.
+func (b BlockBoundaries) Empty() bool {
+	return len(b.starts) == 0
 }
 
 // MapBlockBoundaries maps every line index in a file to the start line of the innermost
 // function/type/struct/class block that contains it, using sigFn to detect block signatures.
-func MapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
+func MapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) BlockBoundaries {
 	return mapBlockBoundaries(lines, sigFn)
 }
 
 // line index → inner-most block start line index.
-func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
-	boundaries := make(map[int]int)
+// newBlockBoundaries allocates the per-line mapping, pre-filled with NoBlock.
+func newBlockBoundaries(lineCount int) BlockBoundaries {
+	starts := make([]int32, lineCount)
+	ends := make([]int32, lineCount)
+
+	for i := range starts {
+		starts[i], ends[i] = NoBlock, NoBlock
+	}
+
+	return BlockBoundaries{starts: starts, ends: ends}
+}
+
+// mapBlockBoundaries returns the zero value for input too large to index with
+// int32; callers cap files far below that, so it is a guard, not a limit.
+func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) BlockBoundaries {
+	if len(lines) > math.MaxInt32 {
+		return BlockBoundaries{}
+	}
+
+	boundaries := newBlockBoundaries(len(lines))
+
 	stack := make([]fnEntry, 0, initialStackCap)
-	depth := 0
+
+	depth, state := 0, byte(stateCode)
 
 	for lineIdx, line := range lines {
+		startsInCode := state == stateCode
+
 		depthBefore := depth
-		opens, closes := braceDelta(line)
+		opens, closes, nextState := scanLine(line, state)
+		state = nextState
 		depth = depthBefore + opens - closes
 
-		// Detect new block signature (function, struct, class, etc)
-		if sigFn(line) {
+		// Detect new block signature (function, struct, class, etc). A line that
+		// starts inside a string or comment is text: detecting a signature there
+		// invents symbols from code samples embedded in raw strings.
+		if startsInCode && sigFn(line) && !awaitingKeywordSignature(stack) {
+			keyword := signatureKeyword(line)
+
 			if opens > 0 {
 				// Signature + opening brace on same line: bodyDepth = depth before signature
-				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: depthBefore})
+				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: depthBefore, keyword: keyword})
 			} else {
 				// Signature without brace; bodyDepth set when brace found
-				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: -1})
+				stack = append(stack, fnEntry{startLine: lineIdx, bodyDepth: -1, keyword: keyword})
 			}
 		}
 
@@ -617,15 +958,75 @@ func mapBlockBoundaries(lines [][]byte, sigFn func([]byte) bool) map[int]int {
 	return boundaries
 }
 
+// signatureKeyword reports whether a line opens with a function keyword
+// (func/fn/fun/def/function, possibly behind pub/async/export). It reads bytes so
+// the scan path does not allocate for every candidate signature line.
+func signatureKeyword(line []byte) bool {
+	trimmed := bytes.TrimSpace(line)
+
+	end := bytes.IndexAny(trimmed, " (")
+	if end < 0 {
+		end = len(trimmed)
+	}
+
+	switch string(trimmed[:end]) { //nolint:staticcheck // string(b) in a switch is folded, no allocation
+	case "func", "fn", "fun", "def", "function":
+		return true
+	}
+
+	fields := bytes.Fields(trimmed)
+	if len(fields) > 1 {
+		switch string(fields[0]) {
+		case "pub", "pub(crate)", "pub(super)", "async", "export":
+			return true
+		}
+	}
+
+	// Mid-line " function(" ("x = function() {", "export default function() {").
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] != ' ' {
+			continue
+		}
+
+		rest := trimmed[i+1:]
+		if len(rest) >= 9 && string(rest[:9]) == "function(" {
+			return true
+		}
+
+		if len(rest) >= 10 && string(rest[:10]) == "function (" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// awaitingKeywordSignature reports whether the innermost pending entry is a
+// func/def/fn signature still looking for its opening brace. Continuation lines of
+// such a signature ("\tremaining int, sigFn func([]byte) bool) error {") must not
+// be taken for signatures of their own — that shadows the real line and its name.
+func awaitingKeywordSignature(stack []fnEntry) bool {
+	if len(stack) == 0 {
+		return false
+	}
+
+	top := stack[len(stack)-1]
+
+	return top.bodyDepth < 0 && top.keyword
+}
+
 // closeEndedBlocks pops functions whose body closed at line i, mapping their lines.
-func closeEndedBlocks(stack []fnEntry, i, depth int, boundaries map[int]int) []fnEntry {
+func closeEndedBlocks(stack []fnEntry, i, depth int, boundaries BlockBoundaries) []fnEntry {
 	for len(stack) > 0 && stack[len(stack)-1].bodyDepth >= 0 && depth == stack[len(stack)-1].bodyDepth {
 		top := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+
+		boundaries.ends[top.startLine] = int32(i) // #nosec G115 -- guarded by len(lines) check
+
 		// Map only unclaimed lines (inner functions keep their mapping)
 		for j := top.startLine; j <= i; j++ {
-			if _, exists := boundaries[j]; !exists {
-				boundaries[j] = top.startLine
+			if boundaries.starts[j] == NoBlock {
+				boundaries.starts[j] = int32(top.startLine) // #nosec G115 -- guarded by len(lines) check
 			}
 		}
 	}
@@ -634,12 +1035,14 @@ func closeEndedBlocks(stack []fnEntry, i, depth int, boundaries map[int]int) []f
 }
 
 // closeUnterminated maps functions left open at EOF to the last line.
-func closeUnterminated(stack []fnEntry, lineCount int, boundaries map[int]int) {
+func closeUnterminated(stack []fnEntry, lineCount int, boundaries BlockBoundaries) {
 	for _, v := range slices.Backward(stack) {
 		if v.bodyDepth >= 0 {
+			boundaries.ends[v.startLine] = int32(lineCount - 1) // #nosec G115 -- guarded by len(lines) check
+
 			for j := v.startLine; j < lineCount; j++ {
-				if _, exists := boundaries[j]; !exists {
-					boundaries[j] = v.startLine
+				if boundaries.starts[j] == NoBlock {
+					boundaries.starts[j] = int32(v.startLine) // #nosec G115 -- guarded by len(lines) check
 				}
 			}
 		}
@@ -647,8 +1050,8 @@ func closeUnterminated(stack []fnEntry, lineCount int, boundaries map[int]int) {
 }
 
 // EnclosingSymbol returns the name of the function/type that encloses lineIdx (0-based).
-func EnclosingSymbol(lines [][]byte, lineIdx int, boundaries map[int]int) string {
-	start, ok := boundaries[lineIdx]
+func EnclosingSymbol(lines [][]byte, lineIdx int, boundaries BlockBoundaries) string {
+	start, ok := boundaries.Start(lineIdx)
 	if !ok {
 		return ""
 	}
@@ -656,36 +1059,13 @@ func EnclosingSymbol(lines [][]byte, lineIdx int, boundaries map[int]int) string
 	return extractFuncName(string(lines[start]))
 }
 
-func buildFuncMatch(lines [][]byte, fnStart int) *FuncMatch {
-	depth := 0
-	started := false
-
-	fnEnd := len(lines) - 1
-
-	for lineIdx := fnStart; lineIdx < len(lines); lineIdx++ {
-		opens, closes := braceDelta(lines[lineIdx])
-		if opens > 0 {
-			started = true
-		}
-
-		depth += opens - closes
-		if started && depth == 0 {
-			fnEnd = lineIdx
-
-			break
-		}
-	}
-
+func buildFuncMatch(lines [][]byte, fnStart, fnEnd int, needBody bool) *FuncMatch {
 	name := extractFuncName(string(lines[fnStart]))
 
-	var body bytes.Buffer
+	var body string
 
-	for lineIdx := fnStart; lineIdx <= fnEnd; lineIdx++ {
-		if lineIdx > fnStart {
-			body.WriteByte('\n')
-		}
-
-		body.Write(lines[lineIdx])
+	if needBody {
+		body = joinBlock(lines, fnStart, fnEnd)
 	}
 
 	return &FuncMatch{
@@ -693,17 +1073,26 @@ func buildFuncMatch(lines [][]byte, fnStart int) *FuncMatch {
 		EndLine: fnEnd + 1,
 		Name:    name,
 		Lines:   fnEnd - fnStart + 1,
-		Body:    body.String(),
+		Body:    body,
 		File:    "",
 		Kind:    "",
 	}
 }
 
 // braceDelta counts { and } in a line, skipping strings and comments.
-// Uses a simple state machine DFA.
+// For a whole file use scanLine, which carries state across lines: a raw string or
+// block comment opened on one line continues on the next.
 func braceDelta(line []byte) (int, int) {
+	opens, closes, _ := scanLine(line, stateCode)
+
+	return opens, closes
+}
+
+// scanLine counts braces in one line and returns the lexical state entering the
+// next one. Multi-line constructs (backtick strings, block comments) carry over;
+// quotes do not, because a newline inside them ends the construct here.
+func scanLine(line []byte, state byte) (int, int, byte) {
 	opens, closes := 0, 0
-	state := byte(stateCode)
 
 	for idx := 0; idx < len(line); idx++ {
 		done := false
@@ -722,11 +1111,16 @@ func braceDelta(line []byte) (int, int) {
 		}
 
 		if done {
-			return opens, closes
+			break
 		}
 	}
 
-	return opens, closes
+	switch state {
+	case stateLineComment, stateDoubleQuote, stateSingleQuote:
+		state = stateCode
+	}
+
+	return opens, closes, state
 }
 
 // scanCodeChar handles one char in code context, updating brace counts and state.
@@ -891,7 +1285,15 @@ func isFuncSigStart(sig string) bool {
 	}
 
 	// Must contain opening paren (function parameter list)
-	if !strings.Contains(sig, "(") {
+	openParen := strings.Index(sig, "(")
+	if openParen < 0 {
+		return false
+	}
+
+	// A continuation line ("\tc int, d bool) error {") closes its parameter list
+	// before opening the result list; a real signature opens "(" first. Without
+	// this the continuation shadows the signature line it belongs to.
+	if closeParen := strings.Index(sig, ")"); closeParen >= 0 && closeParen < openParen {
 		return false
 	}
 
@@ -908,6 +1310,7 @@ func isLangFuncKeyword(sig string) bool {
 	return strings.HasPrefix(sig, "func ") || strings.HasPrefix(sig, "func(") ||
 		strings.HasPrefix(sig, "fn ") || strings.HasPrefix(sig, "pub fn ") ||
 		strings.HasPrefix(sig, "pub(crate) fn ") || strings.HasPrefix(sig, "pub(super) fn ") ||
+		strings.HasPrefix(sig, "fun ") ||
 		strings.HasPrefix(sig, "def ") || strings.HasPrefix(sig, "async def ") ||
 		strings.HasPrefix(sig, "function ") || strings.HasPrefix(sig, "function(")
 }
@@ -958,6 +1361,24 @@ func looksLikeFuncStart(sig string) bool {
 		return false
 	}
 
+	// Calls look like declarations when their arguments open a brace:
+	// "send(Response{" and "s.writeJSON(Response{" are expressions, while
+	// "void foo(", "someMethod(p: T): R {" and "render() {" are declarations.
+	if idx := strings.Index(sig, "("); idx >= 0 {
+		// Rust method chains take closures: ".map(|x| {".
+		closureParams := strings.HasPrefix(sig[idx+1:], "|")
+
+		// A dot-qualified callee is a call, never a declaration.
+		if idx > 0 && strings.ContainsAny(sig[:idx], ".-") && !closureParams {
+			return false
+		}
+
+		// A declaration closes its parameter list before the block opens.
+		if !closureParams && strings.HasSuffix(sig, "{") && !strings.Contains(sig[idx:], ")") {
+			return false
+		}
+	}
+
 	// Quick check: ends with { or has ( followed eventually by ) then { or :
 	return (strings.HasSuffix(strings.TrimSpace(sig), "{") ||
 		strings.HasSuffix(strings.TrimSpace(sig), ":")) &&
@@ -1003,7 +1424,7 @@ func extractFuncName(sig string) string {
 		// No parens — take the first word (for "RemoveType struct {" after type stripping)
 		parts := strings.Fields(sig)
 		if len(parts) > 0 {
-			return strings.TrimRight(parts[0], " \t\r\n{")
+			return trimTypeParams(strings.TrimRight(parts[0], " \t\r\n{"))
 		}
 
 		return sig
@@ -1014,10 +1435,8 @@ func extractFuncName(sig string) string {
 		return "<anonymous>"
 	}
 
-	// Handle generics: Name<T>( → Name
-	if gtIdx := strings.Index(before, "<"); gtIdx >= 0 {
-		before = strings.TrimSpace(before[:gtIdx])
-	}
+	// Handle generics: Name<T>( and Name[T any]( → Name
+	before = trimTypeParams(before)
 
 	// Take the last word (for "func (r *T) Name" or "type Name" or "Name<T>")
 	parts := strings.Fields(before)
@@ -1036,6 +1455,15 @@ func extractFuncName(sig string) string {
 	}
 
 	return "<fn>"
+}
+
+// trimTypeParams drops a generic parameter list: Name<T any> → Name, Name[T any] → Name.
+func trimTypeParams(name string) string {
+	if idx := strings.IndexAny(name, "<["); idx >= 0 {
+		return strings.TrimSpace(name[:idx])
+	}
+
+	return name
 }
 
 // stripNamePrefixes removes language keywords from the start of a signature.
@@ -1086,7 +1514,7 @@ func arrowFuncName(sig string) string {
 
 // extractBlocksIndent handles Python and other indent-based languages.
 func extractBlocksIndent(lines [][]byte, pattern *regexp.Regexp, limit int,
-	sigFn func([]byte) bool) ([]FuncMatch, error) {
+	sigFn func([]byte) bool, needBody bool) ([]FuncMatch, error) {
 	var results []FuncMatch
 
 	seen := make(map[int]bool)
@@ -1109,7 +1537,11 @@ func extractBlocksIndent(lines [][]byte, pattern *regexp.Regexp, limit int,
 
 		seen[lineIdx] = true
 		name := extractFuncName(string(lines[lineIdx]))
-		body := joinBlock(lines, lineIdx, fnEnd)
+
+		body := ""
+		if needBody {
+			body = joinBlock(lines, lineIdx, fnEnd)
+		}
 
 		results = append(results, FuncMatch{
 			Line:    lineIdx + 1,

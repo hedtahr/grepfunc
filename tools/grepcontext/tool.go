@@ -268,6 +268,8 @@ func scanWindows(arg args, patternRe *regexp.Regexp, resolved string, need int) 
 		glob = "*"
 	}
 
+	matcher := grepfunc.CompileGlob(glob)
+
 	err := filepath.WalkDir(resolved, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -281,7 +283,7 @@ func scanWindows(arg args, patternRe *regexp.Regexp, resolved string, need int) 
 			return nil
 		}
 
-		wins, err := scanWindowFile(arg, resolved, path, glob, entry, patternRe, need-len(all))
+		wins, err := scanWindowFile(arg, resolved, path, glob, matcher, entry, patternRe, need-len(all))
 		if err != nil {
 			return err
 		}
@@ -304,15 +306,14 @@ func scanWindows(arg args, patternRe *regexp.Regexp, resolved string, need int) 
 }
 
 // scanWindowFile parses one file and builds its context windows.
-func scanWindowFile(arg args, resolved, path, glob string, entry fs.DirEntry,
+func scanWindowFile(arg args, resolved, path, glob string, matcher *grepfunc.GlobMatcher, entry fs.DirEntry,
 	patternRe *regexp.Regexp, need int) ([]window, error) {
 	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
 		return nil, nil
 	}
 
 	rel, _ := filepath.Rel(resolved, path)
-
-	if !grepfunc.MatchGlob(glob, rel) {
+	if !matcher.Match(rel) {
 		return nil, nil
 	}
 
@@ -348,47 +349,54 @@ func isSkippableDir(base string) bool {
 		base == "__pycache__" || strings.HasPrefix(base, ".")
 }
 
-// matchWindows builds context windows for all pattern hits in one file.
+// matchWindows builds context windows for all pattern hits in one file. Matching
+// runs over the raw bytes first, so a file without hits is never split or
+// materialised line by line.
 func matchWindows(data []byte, rel string, arg args, patternRe *regexp.Regexp, need int) []window {
-	rawLines := bytes.Split(data, []byte("\n"))
-
-	strs := make([]string, len(rawLines))
-	for i, l := range rawLines {
-		strs[i] = string(l)
+	if bytes.IndexByte(data, '\r') >= 0 {
+		data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	}
 
-	var boundaries map[int]int
+	hits := patternRe.FindAllIndex(data, -1)
+	if len(hits) == 0 {
+		return nil
+	}
+
+	starts := lineStarts(data)
+
+	var (
+		lines      [][]byte
+		boundaries grepfunc.BlockBoundaries
+	)
 
 	if arg.Scope {
-		combinedSig := func(line []byte) bool {
-			return grepfunc.IsFuncSig(line) || grepfunc.IsStructSig(line)
-		}
-		boundaries = grepfunc.MapBlockBoundaries(strsToBytes(strs), combinedSig)
+		lines = bytes.Split(data, []byte("\n"))
+		boundaries = grepfunc.MapBlockBoundaries(lines, combinedSig)
 	}
 
-	var windows []window
+	windows := make([]window, 0, min(need, len(hits)))
 
 	prevEnd := -1
 
-	for lineIdx, l := range strs {
-		if !patternRe.MatchString(l) {
-			continue
-		}
-
-		if lineIdx <= prevEnd {
+	for _, hit := range hits {
+		matchLineIdx := lineIndexAt(starts, hit[0])
+		if matchLineIdx <= prevEnd {
 			continue // covered by previous window
 		}
 
-		start := max(0, lineIdx-arg.ContextLines)
-		end := min(len(strs)-1, lineIdx+arg.ContextLines)
+		endLineIdx := lineIndexAt(starts, max(hit[1]-1, hit[0]))
+		start := max(0, matchLineIdx-arg.ContextLines)
+		end := min(len(starts)-1, endLineIdx+arg.ContextLines)
+
 		windows = append(windows, window{
 			relPath:   rel,
-			matchLine: lineIdx + 1,
+			matchLine: matchLineIdx + 1,
 			start:     start,
 			end:       end,
-			lines:     strs[start : end+1],
-			scope:     scopeName(strs, lineIdx, boundaries),
+			lines:     windowLines(data, starts, start, end),
+			scope:     scopeName(lines, boundaries, matchLineIdx),
 		})
+
 		prevEnd = end
 
 		if len(windows) >= need {
@@ -397,6 +405,48 @@ func matchWindows(data []byte, rel string, arg args, patternRe *regexp.Regexp, n
 	}
 
 	return windows
+}
+
+// matchesScopeSig reports whether a line starts a function or type block.
+func combinedSig(line []byte) bool {
+	return grepfunc.IsFuncSig(line) || grepfunc.IsStructSig(line)
+}
+
+// lineStarts returns the byte offset of every line start, matching the line
+// count of bytes.Split(data, "\n").
+func lineStarts(data []byte) []int {
+	starts := make([]int, 1, 64+bytes.Count(data, []byte("\n")))
+
+	for i, b := range data {
+		if b == '\n' {
+			starts = append(starts, i+1)
+		}
+	}
+
+	return starts
+}
+
+// lineIndexAt returns the index of the line containing byte offset ofs.
+func lineIndexAt(starts []int, ofs int) int {
+	idx := sort.SearchInts(starts, ofs+1) - 1
+
+	return max(idx, 0)
+}
+
+// windowLines materialises just the lines of one window.
+func windowLines(data []byte, starts []int, start, end int) []string {
+	lines := make([]string, 0, end-start+1)
+
+	for i := start; i <= end; i++ {
+		lineEnd := len(data)
+		if i+1 < len(starts) {
+			lineEnd = starts[i+1] - 1
+		}
+
+		lines = append(lines, string(data[starts[i]:lineEnd]))
+	}
+
+	return lines
 }
 
 // renderCountOnly builds the per-file match count output.
@@ -533,7 +583,9 @@ func renderWindow(buf *strings.Builder, win window, arg args) {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(win.relPath)), ".")
 	writeWindowHeader(buf, win, arg.GroupByFile)
 
-	buf.WriteString("```" + ext + "\n")
+	buf.WriteString("```")
+	buf.WriteString(ext)
+	buf.WriteByte('\n')
 
 	for idx, line := range win.lines {
 		lineNum := win.start + idx + 1
@@ -608,24 +660,6 @@ func terseOutput(arg args, page []window, total, start, end int, suffix string) 
 	return output
 }
 
-func scopeName(lines []string, lineIdx int, boundaries map[int]int) string {
-	if boundaries == nil {
-		return ""
-	}
-
-	start, ok := boundaries[lineIdx]
-	if !ok || start >= len(lines) {
-		return ""
-	}
-
-	return grepfunc.EnclosingSymbol(strsToBytes(lines), lineIdx, boundaries)
-}
-
-func strsToBytes(lines []string) [][]byte {
-	b := make([][]byte, len(lines))
-	for i, s := range lines {
-		b[i] = []byte(s)
-	}
-
-	return b
+func scopeName(lines [][]byte, boundaries grepfunc.BlockBoundaries, lineIdx int) string {
+	return grepfunc.EnclosingSymbol(lines, lineIdx, boundaries)
 }

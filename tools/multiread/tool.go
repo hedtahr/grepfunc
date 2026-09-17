@@ -265,6 +265,7 @@ func walkGlob(entry readEntry, maxTotalFiles int) []readEntry {
 	}
 
 	root := server.ProjectRoot
+	matcher := grepfunc.CompileGlob(glob)
 
 	var found []readEntry
 
@@ -279,7 +280,7 @@ func walkGlob(entry readEntry, maxTotalFiles int) []readEntry {
 			return err
 		}
 
-		ok, walkErr := matchGlobFile(root, path, glob, dirEntry)
+		ok, walkErr := matchGlobFile(root, path, matcher, dirEntry)
 		if walkErr != nil {
 			return walkErr
 		}
@@ -339,13 +340,13 @@ func skipDir(name string) bool {
 
 // matchGlobFile reports whether path matches glob and is a readable, non-binary,
 // size-bounded regular file.
-func matchGlobFile(root, path, glob string, dirEntry fs.DirEntry) (bool, error) {
+func matchGlobFile(root, path string, matcher *grepfunc.GlobMatcher, dirEntry fs.DirEntry) (bool, error) {
 	if !dirEntry.Type().IsRegular() || server.IsBannedPath(path) {
 		return false, nil
 	}
 
 	rel, _ := filepath.Rel(root, path)
-	if !grepfunc.MatchGlob(glob, rel) {
+	if !matcher.Match(rel) {
 		return false, nil
 	}
 
@@ -375,6 +376,7 @@ func handleGlob(input args) (*server.ToolCallResult, error) {
 
 	root := server.ProjectRoot
 	lines := lineLimit(input.Lines)
+	matcher := grepfunc.CompileGlob(glob)
 
 	var matched []string
 
@@ -391,7 +393,7 @@ func handleGlob(input args) (*server.ToolCallResult, error) {
 			return nil
 		}
 
-		ok, walkErr := matchGlobFile(root, path, glob, dirEntry)
+		ok, walkErr := matchGlobFile(root, path, matcher, dirEntry)
 		if walkErr != nil {
 			return walkErr
 		}
@@ -488,6 +490,12 @@ func renderEntry(buf *strings.Builder, entry readEntry, compact, showEst bool) {
 		if total >= start && (endAt <= 0 || total <= endAt) && len(lines) < maxEntryLines {
 			lines = append(lines, line)
 		}
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		fmt.Fprintf(buf, "%s\n[error: %v]\n", rel, scanErr)
+
+		return
 	}
 
 	actualEnd := start + len(lines) - 1

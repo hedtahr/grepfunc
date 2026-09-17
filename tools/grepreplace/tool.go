@@ -105,6 +105,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 
 	walker := &replaceWalker{
 		re:           pattern,
+		matcher:      grepfunc.CompileGlob(glob),
 		glob:         glob,
 		root:         root,
 		maxFiles:     maxFiles,
@@ -160,6 +161,7 @@ func resolveScope(req args) (string, string, int) {
 
 type replaceWalker struct {
 	re           *regexp.Regexp
+	matcher      *grepfunc.GlobMatcher
 	glob         string
 	root         string
 	maxFiles     int
@@ -211,7 +213,7 @@ func (w *replaceWalker) applyFile(path string, entry fs.DirEntry) error {
 		return nil
 	}
 
-	if !grepfunc.MatchGlob(w.glob, w.relPath(path)) {
+	if !w.matcher.Match(w.relPath(path)) {
 		return nil
 	}
 

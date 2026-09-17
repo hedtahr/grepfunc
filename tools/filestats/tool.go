@@ -123,6 +123,7 @@ func parseArgs(raw json.RawMessage) (args, error) {
 func collectStats(arg args) (map[string]*dirStats, int, int, error) {
 	walker := &statsWalker{
 		arg:        arg,
+		include:    grepfunc.CompileGlob(arg.Include),
 		useGlob:    arg.Include != "*",
 		stats:      map[string]*dirStats{},
 		totalFiles: 0,
@@ -139,6 +140,7 @@ func collectStats(arg args) (map[string]*dirStats, int, int, error) {
 
 type statsWalker struct {
 	arg        args
+	include    *grepfunc.GlobMatcher
 	useGlob    bool
 	stats      map[string]*dirStats
 	totalFiles int
@@ -166,7 +168,7 @@ func (w *statsWalker) step(path string, entry fs.DirEntry, walkErr error) error 
 	rel, _ := filepath.Rel(w.arg.Path, path)
 	rel = filepath.ToSlash(rel)
 
-	if w.useGlob && !grepfunc.MatchGlob(w.arg.Include, rel) {
+	if w.useGlob && !w.include.Match(rel) {
 		return nil
 	}
 

@@ -307,6 +307,8 @@ func checkReferences(arg args, include string, nameToDecl map[string]string,
 // scanChunk walks the tree counting references for one chunk of names.
 func scanChunk(root, include string, chunkRe, declRe *regexp.Regexp,
 	nameToDecl map[string]string, refCount map[string]int) {
+	matcher := grepfunc.CompileGlob(include)
+
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -320,7 +322,7 @@ func scanChunk(root, include string, chunkRe, declRe *regexp.Regexp,
 			return nil
 		}
 
-		err = scanChunkFile(root, path, include, entry, chunkRe, declRe, nameToDecl, refCount)
+		err = scanChunkFile(root, path, matcher, entry, chunkRe, declRe, nameToDecl, refCount)
 		if err != nil {
 			return err
 		}
@@ -331,14 +333,14 @@ func scanChunk(root, include string, chunkRe, declRe *regexp.Regexp,
 }
 
 // scanChunkFile counts references in one file during the walk.
-func scanChunkFile(root, path, include string, entry fs.DirEntry, chunkRe, declRe *regexp.Regexp,
+func scanChunkFile(root, path string, matcher *grepfunc.GlobMatcher, entry fs.DirEntry, chunkRe, declRe *regexp.Regexp,
 	nameToDecl map[string]string, refCount map[string]int) error {
 	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
 		return nil
 	}
 
 	rel, _ := filepath.Rel(root, path)
-	if !grepfunc.MatchGlob(include, rel) {
+	if !matcher.Match(rel) {
 		return nil
 	}
 
@@ -356,7 +358,7 @@ func scanChunkFile(root, path, include string, entry fs.DirEntry, chunkRe, declR
 		return nil
 	}
 
-	if include == "*" && grepfunc.IsNonSourceExt(ext) {
+	if matcher.IsDefault() && grepfunc.IsNonSourceExt(ext) {
 		return nil
 	}
 

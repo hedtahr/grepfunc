@@ -711,7 +711,8 @@ func buildResponse(path string, original, current []byte, reformatted bool, resu
 	}
 
 	if result := runValidate(path); result != "" && !skipValidate {
-		buf.WriteString("\n\n\u26a0\ufe0f Validation: " + result)
+		buf.WriteString("\n\n\u26a0\ufe0f Validation: ")
+		buf.WriteString(result)
 	}
 
 	return &server.ToolCallResult{

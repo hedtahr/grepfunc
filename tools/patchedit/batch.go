@@ -172,8 +172,10 @@ func parseBatchArgs(raw json.RawMessage) (batchArgs, error) {
 func collectMatchingPaths(root, glob string) ([]string, error) {
 	var matchedPaths []string
 
+	matcher := grepfunc.CompileGlob(glob)
+
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		return collectPath(path, d, err, root, glob, &matchedPaths)
+		return collectPath(path, d, err, root, matcher, &matchedPaths)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("walk %s: %w", root, err)
@@ -182,7 +184,7 @@ func collectMatchingPaths(root, glob string) ([]string, error) {
 	return matchedPaths, nil
 }
 
-func collectPath(path string, entry fs.DirEntry, err error, root, glob string, matchedPaths *[]string) error {
+func collectPath(path string, entry fs.DirEntry, err error, root string, matcher *grepfunc.GlobMatcher, matchedPaths *[]string) error {
 	if err != nil {
 		return err
 	}
@@ -195,7 +197,7 @@ func collectPath(path string, entry fs.DirEntry, err error, root, glob string, m
 		return nil
 	}
 
-	if skipFile(path, entry, root, glob) {
+	if skipFile(path, entry, root, matcher) {
 		return nil
 	}
 
@@ -209,7 +211,7 @@ func skippedDir(name string) bool {
 		name == ".idea" || name == "__pycache__" || strings.HasPrefix(name, ".")
 }
 
-func skipFile(path string, entry fs.DirEntry, root, glob string) bool {
+func skipFile(path string, entry fs.DirEntry, root string, matcher *grepfunc.GlobMatcher) bool {
 	if !entry.Type().IsRegular() || server.IsBannedPath(path) {
 		return true
 	}
@@ -219,7 +221,7 @@ func skipFile(path string, entry fs.DirEntry, root, glob string) bool {
 		return true
 	}
 
-	if !grepfunc.MatchGlob(glob, rel) {
+	if !matcher.Match(rel) {
 		return true
 	}
 

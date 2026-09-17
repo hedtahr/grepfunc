@@ -115,6 +115,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	walker := &renameWalker{
 		root:    req.Path,
 		re:      namePattern,
+		matcher: grepfunc.CompileGlob(req.Include),
 		include: req.Include,
 		newName: req.NewName,
 		dryRun:  req.DryRun,
@@ -136,6 +137,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 type renameWalker struct {
 	root    string
 	re      *regexp.Regexp
+	matcher *grepfunc.GlobMatcher
 	include string
 	newName string
 	dryRun  bool
@@ -169,7 +171,7 @@ func (w *renameWalker) applyFile(path string, entry fs.DirEntry) error {
 		return fmt.Errorf("rel: %w", err)
 	}
 
-	if !grepfunc.MatchGlob(w.include, rel) {
+	if !w.matcher.Match(rel) {
 		return nil
 	}
 
