@@ -126,6 +126,17 @@ claude mcp add grepfunc -- /Users/you/go/bin/grepfunc
 }
 ```
 
+### Platforms
+
+Linux, macOS and Windows. The runtime is standard library only — no `syscall`, no cgo, no
+OS-specific paths — and CI runs the test suite on all three, cross-compiles every
+`linux`/`darwin`/`windows` × `amd64`/`arm64` combination, and runs the race detector on Linux.
+
+Windows specifics: symbol extraction and search behave identically (paths are slash-normalised
+before glob and `.gitignore` matching, so ignore rules cannot silently stop applying), and
+post-write validation is skipped when the validator (`python3`, `ruff`, `prettier`) is not on
+`PATH` rather than failing the edit.
+
 ### Project root
 
 The server resolves the project root in this order:

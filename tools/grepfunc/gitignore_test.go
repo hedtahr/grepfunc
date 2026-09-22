@@ -50,6 +50,14 @@ func TestLoadGitignoreIgnores(t *testing.T) {
 		{"anchored.txt", false, true},
 		{"src/anchored.txt", false, false}, // anchored to root only
 		{"nested/path", true, true},
+		// Windows-style separators must behave exactly like forward slashes: the
+		// walker feeds filepath.Rel output straight into the matcher.
+		{"ignored_dir", true, true},
+		{"src\\ignored_dir", true, true},
+		{"nested\\path", true, true},
+		{"build\\a\\b\\gen", true, true},
+		{"logs\\debug.log", false, true},
+		{"logs\\keep.log", false, false},
 	}
 
 	for _, c := range cases {

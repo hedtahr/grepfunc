@@ -157,12 +157,17 @@ func (g *gitignoreRules) ignores(rel string, isDir bool) bool {
 		return false
 	}
 
-	s := rel
+	// Rules are compiled with forward slashes and gitignore semantics treat '\' as
+	// a separator on every platform, so normalise here rather than with
+	// filepath.ToSlash: that call is a no-op on Unix, which would leave the
+	// Windows walk (filepath.Rel returning "pkg\\sub\\file.go") unmatchable and
+	// the behaviour untestable anywhere but Windows.
+	s := strings.ReplaceAll(rel, "\\", "/")
 	if isDir {
 		s += "/"
 	}
 
-	base := path.Base(rel)
+	base := path.Base(s)
 	ignored := false
 
 	for _, p := range g.patterns {

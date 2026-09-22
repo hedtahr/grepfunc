@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · go ${{ matrix.go }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ["1.25", "1.26"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: gofmt -l . | tee /tmp/gofmt.out && [ ! -s /tmp/gofmt.out ]
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./... -count=1
+
+      - name: race
+        if: runner.os == 'Linux'
+        run: go test ./tools/grepfunc ./server -race -count=1
+
+  cross-build:
+    name: cross-compile ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      # go vet type-checks the whole tree for the target platform without linking,
+      # so a GOOS-specific API slip fails here rather than in someone's build.
+      - name: vet for ${{ matrix.goos }}/${{ matrix.goarch }}
+        run: go vet ./...
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+      - name: build binary
+        run: go build -o /tmp/grepfunc-${{ matrix.goos }}-${{ matrix.goarch }} .
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: golangci-lint/golangci-lint-action@v6
+        with:
+          version: latest
