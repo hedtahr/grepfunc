@@ -331,8 +331,6 @@ func resolveGlob(glob, root string) (string, error) {
 	return rel, nil
 }
 
-// skipDir reports whether a directory should be pruned from glob walks.
-
 // matchGlobFile reports whether path matches glob and is a readable, non-binary,
 // size-bounded regular file.
 func matchGlobFile(root, path string, matcher *grepfunc.GlobMatcher, dirEntry fs.DirEntry) (bool, error) {

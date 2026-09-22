@@ -1,4 +1,5 @@
-// Package grepdead finds declared symbols with no references outside their file.
+// Package grepdead finds declared symbols nothing references: private ones with no
+// use anywhere, exported ones with no use outside their own file.
 package grepdead
 
 import (
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/grepfunc"
@@ -32,7 +35,7 @@ const refChunkSize = 30
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_dead",
-	Description: "Dead code: declared symbols with zero references outside their file. Skips .gitignore'd dirs.",
+	Description: "Dead code: private symbols nothing references, exported ones unused outside their file. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -368,8 +371,6 @@ func scanChunkFile(root, path string, matcher *grepfunc.GlobMatcher, entry fs.Di
 	return nil
 }
 
-// isSkippableDir reports whether a directory should be excluded from searches.
-
 // countRefs tallies references to candidate names in one file's content.
 func countRefs(data []byte, chunkRe, declRe *regexp.Regexp, path string,
 	nameToDecl map[string]string, refCount map[string]int) {
@@ -390,11 +391,28 @@ func countRefs(data []byte, chunkRe, declRe *regexp.Regexp, path string,
 
 		for _, m := range chunkRe.FindAllStringSubmatch(line, -1) {
 			name := m[1]
-			if declFile, ok := nameToDecl[name]; ok && path != declFile {
+
+			declFile, ok := nameToDecl[name]
+			if !ok {
+				continue
+			}
+
+			// A private symbol counts as referenced from anywhere, its own file
+			// included; only an exported name can be reached from another file,
+			// so a same-file hit is not evidence of use for those.
+			if path != declFile || !exportedName(name) {
 				refCount[name]++
 			}
 		}
 	}
+}
+
+// exportedName reports whether a name looks exported (Go's rule: upper-case
+// first rune), which decides whether a same-file hit counts as a reference.
+func exportedName(name string) bool {
+	r, _ := utf8.DecodeRuneInString(name)
+
+	return unicode.IsUpper(r)
 }
 
 // writeDeadHeader writes the summary line of the dead-symbol report.

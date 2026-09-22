@@ -339,8 +339,6 @@ func scanWindowFile(arg args, resolved, path, glob string, matcher *grepfunc.Glo
 	return matchWindows(data, rel, arg, patternRe, need), nil
 }
 
-// isSkippableDir reports whether a directory should be excluded from searches.
-
 // matchWindows builds context windows for all pattern hits in one file. Matching
 // runs over the raw bytes first, so a file without hits is never split or
 // materialised line by line.

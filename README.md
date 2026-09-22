@@ -165,7 +165,7 @@ are refused, and secret-looking paths are blocked outright.
 | `grep_struct` | Struct/class/interface/enum definitions. `body=true` → full body. |
 | `grep_context` | Matching lines with N lines of context, deduplicated windows, scope annotation. |
 | `grep_refs` | Every reference to a symbol: call sites, type usages, assignments. |
-| `grep_dead` | Declared symbols with zero references outside their own file. |
+| `grep_dead` | Declared symbols nothing references: private ones unused anywhere, exported ones unused outside their own file. |
 | `grep_imports` | Which files import a module, or what a file imports (Go/Python/JS/Rust). |
 | `grep_replace` | Regex find-and-replace across files, `$1` groups and `\n`/`\t` escapes, `dry_run` preview. |
 | `file_symbols` | Func/type definitions with line numbers, no bodies — map an unfamiliar file. |

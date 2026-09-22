@@ -296,8 +296,6 @@ func scanImportFile(arg fileArgs, matcher *grepfunc.GlobMatcher, path string, en
 	return parseImports(data, ext, arg.Module), nil
 }
 
-// isSkippableDir reports whether a directory should be excluded from searches.
-
 func parseImports(data []byte, ext, filter string) []importEntry {
 	switch ext {
 	case ".go":
