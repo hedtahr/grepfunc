@@ -41,7 +41,7 @@ func main() {
 		server.ProjectRoot = *projectRoot
 	}
 
-	srv := server.New("patch-file", "0.9.0")
+	srv := server.New("grepfunc", "0.9.0")
 	srv.Register(patchedit.Tool, patchedit.Handle)
 	srv.Register(grepfunc.Tool, grepfunc.Handle)
 	srv.Register(grepstruct.Tool, grepstruct.Handle)

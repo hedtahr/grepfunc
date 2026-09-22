@@ -34,8 +34,8 @@ survive sessions), `multi_read`, `file_stats`, `git`, `tool_stats`.
 
 ## Install
 
-Requires **Go 1.26.2 or newer** (whatever `go.mod` declares; the code uses `sync.WaitGroup.Go`,
-`for range int` and `b.Loop`). No cgo, no runtime dependencies.
+Requires **Go 1.25 or newer** (the only 1.25 API used is `sync.WaitGroup.Go`; `go vet`'s
+`stdversion` analyser verifies that). No cgo, no runtime dependencies.
 
 ```sh
 go install github.com/hedtahr/grepfunc@latest
@@ -239,5 +239,4 @@ golangci-lint run ./... && gosec ./...     # no config committed; defaults are u
 
 ## License
 
-Not chosen yet — add a `LICENSE` file before publishing (MIT or Apache-2.0 are the usual picks
-for developer tooling).
+MIT — see [LICENSE](LICENSE).
