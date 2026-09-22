@@ -55,23 +55,14 @@ type rawResponse struct {
 	Err    *RPCError
 }
 
-// Package-level cross-tool state.
-//
-// WRITE CONTRACT: every write to ProjectRoot, LastPath, lastDir, and
-// projectRootLocked happens either (a) before Run starts (main.go) or
-// (b) synchronously on the Run goroutine — handlers are invoked inline from
-// processLine, so ResolvePath/SetLastPath/applyCwdOverride all run there.
-// Goroutines spawned by Run (requestRoots, persistProjectRoot, autoDiscover,
-// writeCachedRoot) must never touch these directly: requestRoots stages its
-// result in pendingRoot (atomic) for the Run loop to apply via
-// applyPendingRootIfAny, and the persist goroutines only write files.
-//
 // ProjectRoot returns the project root discovered during initialize, or "." if unknown.
 var ProjectRoot = "." //nolint:gochecknoglobals // deliberate cross-tool server state
 
 // LastPath is the last file path operated on. find_related defaults to it.
-var LastPath = "" //nolint:gochecknoglobals // deliberate cross-tool server state
-var lastDir = ""  //nolint:gochecknoglobals // deliberate cross-tool server state
+var (
+	LastPath = "" //nolint:gochecknoglobals // deliberate cross-tool server state
+	lastDir  = "" //nolint:gochecknoglobals // deliberate cross-tool server state
+)
 
 // SetLastPath records the last operated-on file path for relative resolution.
 func SetLastPath(p string) {
@@ -1022,8 +1013,10 @@ func readCachedRoot() string {
 // FindProjectRoot walks up from dir looking for a project marker file.
 // Returns "" when no marker is found.
 func FindProjectRoot(dir string) string {
-	markers := []string{".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml",
-		"setup.py", "Gemfile", "pom.xml", "build.gradle"}
+	markers := []string{
+		".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml",
+		"setup.py", "Gemfile", "pom.xml", "build.gradle",
+	}
 
 	for {
 		for _, marker := range markers {
