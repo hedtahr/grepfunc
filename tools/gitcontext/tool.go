@@ -19,6 +19,9 @@ const (
 	typeBoolean = "boolean"
 
 	defaultCommitCount = 5
+
+	// restoreDiffMaxLines caps the patch shown before a restore is confirmed.
+	restoreDiffMaxLines = 120
 )
 
 // Tool describes the git_context tool.
@@ -154,7 +157,7 @@ func renderContext(req args, branch, log, status, diffStat string) string {
 //nolint:gochecknoglobals // MCP tool definition
 var GitTool = server.Tool{
 	Name:        "git",
-	Description: "Git operations in one tool: mode=context (branch, commits, status, diff --stat), mode=diff (line changes), mode=restore (undo edits).",
+	Description: "Git operations: mode=context (branch, commits, status, diff --stat), mode=diff (line changes), mode=restore (undo edits; needs confirm=true).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -208,6 +211,11 @@ var GitTool = server.Tool{
 				Description: "Restore mode: file to restore (git restore).",
 				Items:       nil,
 			},
+			"confirm": {
+				Type:        typeBoolean,
+				Description: "Restore mode: required to actually discard changes. Without it the diff that would be lost is shown and nothing changes.",
+				Items:       nil,
+			},
 		},
 		Required:             []string{},
 		AdditionalProperties: false,
@@ -248,11 +256,13 @@ func GitHandle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return Handle(raw)
 }
 
-// handleRestore discards local changes to a file, reverting it to HEAD.
+// handleRestore reverts a tracked file to HEAD. Discarding work needs an explicit
+// confirm=true: without it the call reports what would be lost and changes nothing.
 func handleRestore(raw json.RawMessage) (*server.ToolCallResult, error) {
 	var req struct {
-		File string `json:"file"`
-		Path string `json:"path"`
+		File    string `json:"file"`
+		Path    string `json:"path"`
+		Confirm bool   `json:"confirm"`
 	}
 
 	err := json.Unmarshal(raw, &req)
@@ -286,6 +296,33 @@ func handleRestore(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, errors.New("no git repository found (checked " + server.ProjectRoot + " and parents)")
 	}
 
+	rel := server.RelPath(resolved)
+
+	state, err := porcelainState(gitRoot, resolved)
+	if err != nil {
+		return nil, err
+	}
+
+	switch {
+	case state == "":
+		return textResult(fmt.Sprintf("Nothing to restore: %s has no uncommitted changes.\n", rel)), nil
+	case strings.HasPrefix(state, "??"):
+		return textResult(fmt.Sprintf(
+			"Not restored: %s is untracked, so HEAD has no version to restore. Delete it with delete_path if that is what you want.\n", rel)), nil
+	}
+
+	diff, err := pendingDiff(gitRoot, resolved)
+	if err != nil {
+		return nil, err
+	}
+
+	if !req.Confirm {
+		return textResult(fmt.Sprintf(
+			"REFUSED: restoring %s would discard these local changes (status %q).\n\n```diff\n%s```\n"+
+				"Nothing was changed. Re-run with confirm=true to discard them, or use mode=diff for the full patch.\n",
+			rel, strings.TrimSpace(state), diff)), nil
+	}
+
 	// #nosec G204 -- fixed git binary; path bounds-checked by server
 	cmd := exec.CommandContext(context.Background(), "git", "restore", "--source=HEAD", "--", resolved)
 	cmd.Dir = gitRoot
@@ -295,11 +332,52 @@ func handleRestore(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("git restore %q: %w: %s", resolved, err, strings.TrimSpace(string(out)))
 	}
 
+	return textResult(fmt.Sprintf("Restored %s from HEAD. Discarded:\n\n```diff\n%s```\n", rel, diff)), nil
+}
+
+// porcelainState returns the trimmed `git status --porcelain` line for one path.
+func porcelainState(gitRoot, file string) (string, error) {
+	// #nosec G204 -- fixed git binary; path bounds-checked by server
+	cmd := exec.CommandContext(context.Background(), "git", "status", "--porcelain", "--", file)
+	cmd.Dir = gitRoot
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git status %q: %w", file, err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+// pendingDiff returns the difference from HEAD (staged and unstaged), capped so a
+// regenerated file cannot flood the caller's context.
+func pendingDiff(gitRoot, file string) (string, error) {
+	// #nosec G204 -- fixed git binary; path bounds-checked by server
+	cmd := exec.CommandContext(context.Background(), "git", "diff", "HEAD", "--no-color", "--", file)
+	cmd.Dir = gitRoot
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git diff HEAD %q: %w", file, err)
+	}
+
+	return capLines(string(out), restoreDiffMaxLines), nil
+}
+
+// capLines truncates output to maxLines, noting what was dropped.
+func capLines(s string, maxLines int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+
+	return strings.Join(lines[:maxLines], "\n") +
+		fmt.Sprintf("\n... (%d more lines; use mode=diff)\n", len(lines)-maxLines)
+}
+
+func textResult(text string) *server.ToolCallResult {
 	return &server.ToolCallResult{
-		Content: []server.ToolCallContent{{
-			Type: "text",
-			Text: fmt.Sprintf("Restored %s from HEAD.\n", server.RelPath(resolved)),
-		}},
+		Content: []server.ToolCallContent{{Type: "text", Text: text}},
 		IsError: false,
-	}, nil
+	}
 }

@@ -176,7 +176,7 @@ are refused, and secret-looking paths are blocked outright.
 | `multi_read` | Read files, globs, and line ranges in one call; reports total line counts. |
 | `write_file` | Create or fully overwrite a file (prefer `patch_file` for surgical edits). |
 | `move_symbol` / `rename_symbol` / `delete_symbol` | Move, rename project-wide, or delete a named symbol. |
-| `git` | `mode=context` (branch, commits, status, `diff --stat`), `mode=diff` (staged/base/stat_only), `mode=restore`. |
+| `git` | `mode=context` (branch, commits, status, `diff --stat`), `mode=diff` (staged/base/stat_only), `mode=restore` (revert a file to HEAD; reports the diff it would discard and needs `confirm=true`). |
 | `memory` | Remember/recall project conventions across sessions. |
 | `tool_stats` | Local usage telemetry: call counts, error rates, never-called tools. |
 
@@ -216,26 +216,11 @@ path-taking tools accept an `include` glob (`**/*.go`, `{go,sql}` sets supported
 
 Run them yourself: `go test ./... -bench . -benchmem`.
 
-### Rejected on the numbers
-
-Keeping these out was as deliberate as the features:
-
-- **SIMD / memchr / hand-written assembly.** CPU profiles put byte scanning at ~2% of a full
-  scan, so a perfect vector kernel cannot buy more than that. The dependency-free version of the
-  idea did pay: the scanner now jumps between interesting bytes with `bytes.IndexAny` /
-  `bytes.IndexByte`, with a density switch back to the byte walk.
-- **`go/parser` as the default symbol extractor.** It is exact, but 3.3x slower and 6x heavier
-  than the brace scanner on a 26k-line file. It is kept as a **test oracle** instead: the scanner
-  is asserted to agree with it on every Go file in the repo.
-- **Batching files per work handoff.** Measured within noise on full walks, 2.7x worse on
-  truncated queries.
-- **More search workers.** 8 workers were slower than 4 on both benchmark shapes; 2 were better
-  for truncated queries and 35% worse for full scans, so the cap stayed at 4.
-
 ## Caveats
 
-- **It edits your files.** `patch_file` writes what you asked for and validates after writing;
-  `git` `mode=restore` discards uncommitted changes to a file with no confirmation step yet.
+- **It edits your files.** `patch_file` writes what you asked for and validates after writing.
+  `git` `mode=restore` is the one destructive call: it reverts a file to HEAD, so it prints the
+  diff it would drop and changes nothing until you pass `confirm=true`.
 - Symbol extraction is heuristic outside Go/Rust/JS/TS/Python-shaped code; when a `.go` file does
   not parse it falls back to the brace scanner rather than failing.
 - By default, searches skip known non-source formats (docs, data, lock/log/map files). Pass an
