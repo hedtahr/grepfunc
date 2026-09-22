@@ -30,7 +30,7 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "file_stats",
-	Description: "Project overview: file/line counts, extension breakdown per dir. Mode 'top': files by symbol count.",
+	Description: "Project overview: file/line counts, extension breakdown per dir. Mode 'top': files by symbol count. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

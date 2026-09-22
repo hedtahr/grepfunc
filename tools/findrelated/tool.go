@@ -21,7 +21,7 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "find_related",
-	Description: "Find related files: tests, mocks, siblings, same-named files nearby.",
+	Description: "Find related files: tests, mocks, siblings, same-named files nearby. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

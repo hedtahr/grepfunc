@@ -32,7 +32,7 @@ var (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "rename_symbol",
-	Description: "Rename a function/type/variable project-wide. Word-boundary matching.",
+	Description: "Rename a function/type/variable project-wide. Word-boundary matching. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

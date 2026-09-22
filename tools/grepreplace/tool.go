@@ -38,7 +38,7 @@ var errPatternRequired = errors.New("pattern is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_replace",
-	Description: "Regex find-and-replace across files. Replacement supports $1 groups and \\n \\t escapes. dry_run preview. Skips dot-dirs.",
+	Description: "Regex find-and-replace across files. Replacement supports $1 groups and \\n \\t escapes. dry_run preview. Skips .gitignore'd/dot dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

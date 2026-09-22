@@ -344,11 +344,12 @@ func renderBudgetTerse(arg args, page []FuncMatch, total, start, end int, trunca
 }
 
 // ZeroMatchHint explains an empty result set: include globs match root-relative
-// paths and the default "*" skips known non-source formats.
+// paths, ignored directories are pruned, and the default "*" skips known
+// non-source formats.
 func ZeroMatchHint(include string) string {
-	return fmt.Sprintf("no matches \u2014 include %q matches paths relative to the search root; "+
-		"the default \"*\" skips known non-source formats (docs, data, lock files) "+
-		"(pass include, e.g. \"**/*.md\", to search them).\n", include)
+	return fmt.Sprintf("no matches \u2014 include %q matches root-relative paths; "+
+		".gitignore'd and dot-directories are skipped; the default \"*\" skips docs/data/lock "+
+		"files (pass include to search them).\n", include)
 }
 
 // renderResults builds the text output for a page of matches.

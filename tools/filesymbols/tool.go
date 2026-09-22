@@ -32,7 +32,7 @@ var errPathRequired = errors.New("path is required (no previous path in session)
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "file_symbols",
-	Description: "List func/type definitions with line numbers — no bodies. Map unfamiliar files.",
+	Description: "List func/type definitions with line numbers — no bodies. Map unfamiliar files. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

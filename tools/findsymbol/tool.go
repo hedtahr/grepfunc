@@ -37,7 +37,7 @@ var errNameRequired = errors.New("name is required")
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "find_symbol",
-	Description: "Find a symbol by name: file:line + signature. body=true for full body.",
+	Description: "Find a symbol by name: file:line + signature. body=true for full body. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

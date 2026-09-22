@@ -27,7 +27,7 @@ const (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "grep_imports",
-	Description: "Import relationships: which files import a module, or a file's imports. Go/Python/JS/Rust.",
+	Description: "Import relationships: which files import a module, or a file's imports. Go/Python/JS/Rust. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{

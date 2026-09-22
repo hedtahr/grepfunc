@@ -27,7 +27,7 @@ var (
 //nolint:gochecknoglobals // MCP tool definition
 var BatchTool = server.Tool{
 	Name:        "batch_patch",
-	Description: "Apply the same edits across all files matching a glob. Per-file summary.",
+	Description: "Apply the same edits across all files matching a glob. Per-file summary. Skips .gitignore'd dirs.",
 	InputSchema: server.InputSchema{
 		Type:                 jsonTypeObject,
 		AdditionalProperties: false,
