@@ -129,8 +129,12 @@ claude mcp add grepfunc -- /Users/you/go/bin/grepfunc
 ### Platforms
 
 Linux, macOS and Windows. The runtime is standard library only — no `syscall`, no cgo, no
-OS-specific paths — and CI runs the test suite on all three, cross-compiles every
-`linux`/`darwin`/`windows` × `amd64`/`arm64` combination, and runs the race detector on Linux.
+OS-specific paths — so the same code runs everywhere and cross-compiles to every
+`linux`/`darwin`/`windows` × `amd64`/`arm64` target with a plain `GOOS=… go build`.
+
+There is deliberately no CI. The platform claims here were verified directly: `go vet ./...` is
+clean for the host OS **and** under `GOOS=windows` / `GOOS=linux`, and the test suite runs with
+`go test ./...` (and `-race` where the race detector is available).
 
 Windows specifics: symbol extraction and search behave identically (paths are slash-normalised
 before glob and `.gitignore` matching, so ignore rules cannot silently stop applying), and
