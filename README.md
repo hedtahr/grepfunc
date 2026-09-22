@@ -194,7 +194,8 @@ path-taking tools accept an `include` glob (`**/*.go`, `{go,sql}` sets supported
   marked `N+` with `(cap reached; totals may be incomplete)`, and edits are applied from original
   offsets — no "approximately the same" answers.
 - **Sandboxed by construction.** Symlink-aware root resolution, banned-path rules, 2 MB per-file
-  caps, `.gitignore`-aware walks.
+  caps, and one walk shared by every tool: it prunes `.git`, `node_modules`, `vendor`, dot-dirs and
+  everything the root `.gitignore` excludes.
 - **Read cache with a stability window.** Reads are keyed by path + size + mtime taken from the
   stat the walker already did; files modified within the last 2 seconds are never cached, so a
   file an agent just edited is always read fresh.
@@ -225,6 +226,8 @@ Run them yourself: `go test ./... -bench . -benchmem`.
   not parse it falls back to the brace scanner rather than failing.
 - By default, searches skip known non-source formats (docs, data, lock/log/map files). Pass an
   `include` glob to search them.
+- The walk reads the **root** `.gitignore` only; nested per-directory ignore files are not applied,
+  and a directory named as the search root is always entered.
 - Totals marked `N+` are floors: the walk stops when the page is full. Do not verify a bulk edit
   from a truncated count.
 

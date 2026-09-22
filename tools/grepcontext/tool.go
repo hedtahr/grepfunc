@@ -270,16 +270,12 @@ func scanWindows(arg args, patternRe *regexp.Regexp, resolved string, need int) 
 
 	matcher := grepfunc.CompileGlob(glob)
 
-	err := filepath.WalkDir(resolved, func(path string, entry fs.DirEntry, err error) error {
+	err := grepfunc.WalkDir(resolved, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if entry.IsDir() {
-			if isSkippableDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-
 			return nil
 		}
 
@@ -344,10 +340,6 @@ func scanWindowFile(arg args, resolved, path, glob string, matcher *grepfunc.Glo
 }
 
 // isSkippableDir reports whether a directory should be excluded from searches.
-func isSkippableDir(base string) bool {
-	return base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" ||
-		base == "__pycache__" || strings.HasPrefix(base, ".")
-}
 
 // matchWindows builds context windows for all pattern hits in one file. Matching
 // runs over the raw bytes first, so a file without hits is never split or

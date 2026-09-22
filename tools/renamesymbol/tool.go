@@ -123,7 +123,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		total:   0,
 	}
 
-	walkErr := filepath.WalkDir(req.Path, walker.walk)
+	walkErr := grepfunc.WalkDir(req.Path, walker.walk)
 	if walkErr != nil {
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{Type: "text", Text: fmt.Sprintf("Walk error: %v", walkErr)}},
@@ -151,10 +151,6 @@ func (w *renameWalker) walk(path string, entry fs.DirEntry, walkErr error) error
 	}
 
 	if entry.IsDir() {
-		if skipDir(entry.Name()) {
-			return filepath.SkipDir
-		}
-
 		return nil
 	}
 
@@ -242,11 +238,6 @@ func (w *renameWalker) writeFile(path, rel string, newData []byte, mode fs.FileM
 	}
 
 	return nil
-}
-
-func skipDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == "vendor" ||
-		name == ".idea" || name == "__pycache__" || strings.HasPrefix(name, ".")
 }
 
 func renderSummary(req args, changes []fileChange, totalReplacements int) *server.ToolCallResult {

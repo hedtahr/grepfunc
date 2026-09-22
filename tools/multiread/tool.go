@@ -269,15 +269,13 @@ func walkGlob(entry readEntry, maxTotalFiles int) []readEntry {
 
 	var found []readEntry
 
-	_ = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
-		if err != nil || dirEntry.IsDir() {
-			if dirEntry != nil && dirEntry.IsDir() {
-				if skipDir(dirEntry.Name()) {
-					return filepath.SkipDir
-				}
-			}
-
+	_ = grepfunc.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
+		if err != nil {
 			return err
+		}
+
+		if dirEntry.IsDir() {
+			return nil
 		}
 
 		ok, walkErr := matchGlobFile(root, path, matcher, dirEntry)
@@ -334,9 +332,6 @@ func resolveGlob(glob, root string) (string, error) {
 }
 
 // skipDir reports whether a directory should be pruned from glob walks.
-func skipDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == "vendor" || strings.HasPrefix(name, ".")
-}
 
 // matchGlobFile reports whether path matches glob and is a readable, non-binary,
 // size-bounded regular file.
@@ -380,16 +375,12 @@ func handleGlob(input args) (*server.ToolCallResult, error) {
 
 	var matched []string
 
-	_ = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
+	_ = grepfunc.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if dirEntry.IsDir() {
-			if skipDir(dirEntry.Name()) {
-				return filepath.SkipDir
-			}
-
 			return nil
 		}
 

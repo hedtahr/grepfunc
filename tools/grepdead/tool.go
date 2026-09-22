@@ -309,16 +309,12 @@ func scanChunk(root, include string, chunkRe, declRe *regexp.Regexp,
 	nameToDecl map[string]string, refCount map[string]int) {
 	matcher := grepfunc.CompileGlob(include)
 
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err := grepfunc.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if entry.IsDir() {
-			if isSkippableDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-
 			return nil
 		}
 
@@ -373,10 +369,6 @@ func scanChunkFile(root, path string, matcher *grepfunc.GlobMatcher, entry fs.Di
 }
 
 // isSkippableDir reports whether a directory should be excluded from searches.
-func isSkippableDir(base string) bool {
-	return base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" ||
-		base == "__pycache__" || strings.HasPrefix(base, ".")
-}
 
 // countRefs tallies references to candidate names in one file's content.
 func countRefs(data []byte, chunkRe, declRe *regexp.Regexp, path string,

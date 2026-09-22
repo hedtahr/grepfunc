@@ -130,9 +130,7 @@ func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 		defer close(jobs)
 		defer close(walkDone)
 
-		gi := loadGitignore(root)
-
-		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		_ = WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				if walkErr == nil {
 					walkErr = err
@@ -142,19 +140,6 @@ func search(root, glob string, pattern *regexp.Regexp, limit int, sigFn func([]b
 			}
 
 			if entry.IsDir() {
-				base := entry.Name()
-				if isSkippableDir(base) {
-					return filepath.SkipDir
-				}
-
-				if rel, relErr := filepath.Rel(root, path); relErr == nil && gi.ignores(rel, true) {
-					return filepath.SkipDir
-				}
-
-				return nil
-			}
-
-			if rel, relErr := filepath.Rel(root, path); relErr == nil && gi.ignores(rel, false) {
 				return nil
 			}
 

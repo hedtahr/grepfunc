@@ -174,7 +174,7 @@ func collectMatchingPaths(root, glob string) ([]string, error) {
 
 	matcher := grepfunc.CompileGlob(glob)
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := grepfunc.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		return collectPath(path, d, err, root, matcher, &matchedPaths)
 	})
 	if err != nil {
@@ -190,10 +190,6 @@ func collectPath(path string, entry fs.DirEntry, err error, root string, matcher
 	}
 
 	if entry.IsDir() {
-		if skippedDir(entry.Name()) {
-			return filepath.SkipDir
-		}
-
 		return nil
 	}
 
@@ -204,11 +200,6 @@ func collectPath(path string, entry fs.DirEntry, err error, root string, matcher
 	*matchedPaths = append(*matchedPaths, path)
 
 	return nil
-}
-
-func skippedDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == "vendor" ||
-		name == ".idea" || name == "__pycache__" || strings.HasPrefix(name, ".")
 }
 
 func skipFile(path string, entry fs.DirEntry, root string, matcher *grepfunc.GlobMatcher) bool {

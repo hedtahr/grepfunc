@@ -61,11 +61,6 @@ type dirStats struct {
 	extCounts map[string]int
 }
 
-var skipDirs = map[string]bool{ //nolint:gochecknoglobals // static walk filter
-	".git": true, "node_modules": true, "vendor": true,
-	".idea": true, "__pycache__": true,
-}
-
 // Handle processes a file_stats tool call and returns the result.
 func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	arg, err := parseArgs(raw)
@@ -130,7 +125,7 @@ func collectStats(arg args) (map[string]*dirStats, int, int, error) {
 		totalLines: 0,
 	}
 
-	err := filepath.WalkDir(arg.Path, walker.step)
+	err := grepfunc.WalkDir(arg.Path, walker.step)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("walk: %w", err)
 	}
@@ -153,10 +148,6 @@ func (w *statsWalker) step(path string, entry fs.DirEntry, walkErr error) error 
 	}
 
 	if entry.IsDir() {
-		if w.skipDir(entry.Name()) {
-			return filepath.SkipDir
-		}
-
 		return nil
 	}
 
@@ -203,10 +194,6 @@ func (w *statsWalker) step(path string, entry fs.DirEntry, walkErr error) error 
 	w.totalLines += lines
 
 	return nil
-}
-
-func (w *statsWalker) skipDir(name string) bool {
-	return skipDirs[name] || strings.HasPrefix(name, ".")
 }
 
 func (w *statsWalker) skipFile(path string, entry fs.DirEntry, ext string) bool {

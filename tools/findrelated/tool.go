@@ -265,16 +265,12 @@ func searchRoot(dir string) string {
 func walkRelated(root, name, filePath string, seen map[string]bool) []string {
 	var results []string
 
-	_ = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
+	_ = grepfunc.WalkDir(root, func(path string, dirEntry fs.DirEntry, err error) error {
 		if err != nil {
 			return filepath.SkipDir
 		}
 
 		if dirEntry.IsDir() {
-			if skipWalkDir(dirEntry.Name()) {
-				return filepath.SkipDir
-			}
-
 			// Skip dirs >4 levels deep from projectRoot.
 			if depthBetween(root, path) > maxDepth {
 				return filepath.SkipDir
@@ -297,12 +293,6 @@ func walkRelated(root, name, filePath string, seen map[string]bool) []string {
 	})
 
 	return results
-}
-
-// skipWalkDir reports whether a directory should be pruned from the related-file walk.
-func skipWalkDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == "vendor" ||
-		name == ".idea" || name == "__pycache__" || strings.HasPrefix(name, ".")
 }
 
 // prioritizeResults orders test/mock/sibling hits first and caps the result list.

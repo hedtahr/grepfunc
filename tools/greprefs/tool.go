@@ -98,7 +98,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	}
 
 	walker := newRefWalker(arg, refRe)
-	_ = filepath.WalkDir(arg.Path, walker.step)
+	_ = grepfunc.WalkDir(arg.Path, walker.step)
 
 	output := renderRefs(arg, walker.sites, walker.total, walker.scannedAll)
 
@@ -208,10 +208,6 @@ func (w *refWalker) step(path string, entry fs.DirEntry, err error) error {
 	}
 
 	if entry.IsDir() {
-		if w.skipDir(entry) {
-			return filepath.SkipDir
-		}
-
 		return nil
 	}
 
@@ -248,13 +244,6 @@ func (w *refWalker) step(path string, entry fs.DirEntry, err error) error {
 	}
 
 	return nil
-}
-
-func (w *refWalker) skipDir(entry fs.DirEntry) bool {
-	base := entry.Name()
-
-	return base == ".git" || base == "node_modules" || base == "vendor" ||
-		base == ".idea" || base == "__pycache__" || strings.HasPrefix(base, ".")
 }
 
 func (w *refWalker) skipFile(path string, entry fs.DirEntry) bool {

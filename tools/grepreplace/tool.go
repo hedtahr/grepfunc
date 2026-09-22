@@ -116,7 +116,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		results:      nil,
 	}
 
-	walkErr := filepath.WalkDir(root, walker.walk)
+	walkErr := grepfunc.WalkDir(root, walker.walk)
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk error: %w", walkErr)
 	}
@@ -178,10 +178,6 @@ func (w *replaceWalker) walk(path string, entry fs.DirEntry, walkErr error) erro
 	}
 
 	if entry.IsDir() {
-		if skipDir(entry.Name()) {
-			return filepath.SkipDir
-		}
-
 		return nil
 	}
 
@@ -242,10 +238,6 @@ func (w *replaceWalker) applyFile(path string, entry fs.DirEntry) error {
 	w.results = append(w.results, result{rel: server.RelPath(path), count: len(matches)})
 
 	return nil
-}
-
-func skipDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == "vendor" || strings.HasPrefix(name, ".")
 }
 
 // relPath makes include globs match root-relative paths, so "postgres/query.sql"

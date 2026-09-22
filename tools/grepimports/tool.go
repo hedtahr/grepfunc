@@ -232,16 +232,12 @@ func scanImports(arg fileArgs) ([]fileImports, error) {
 
 	matcher := grepfunc.CompileGlob(arg.Include)
 
-	err := filepath.WalkDir(arg.Path, func(path string, entry fs.DirEntry, err error) error {
+	err := grepfunc.WalkDir(arg.Path, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if entry.IsDir() {
-			if isSkippableDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-
 			return nil
 		}
 
@@ -301,10 +297,6 @@ func scanImportFile(arg fileArgs, matcher *grepfunc.GlobMatcher, path string, en
 }
 
 // isSkippableDir reports whether a directory should be excluded from searches.
-func isSkippableDir(base string) bool {
-	return base == ".git" || base == "node_modules" || base == "vendor" || base == ".idea" ||
-		base == "__pycache__" || strings.HasPrefix(base, ".")
-}
 
 func parseImports(data []byte, ext, filter string) []importEntry {
 	switch ext {
