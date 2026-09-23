@@ -1,3 +1,4 @@
 .llm/
 .patch_backup/
 bug/
+.tx
