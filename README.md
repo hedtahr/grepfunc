@@ -201,23 +201,21 @@ are unioned into a single pass and reported under one label.
 - **Read cache with a stability window.** Reads are keyed by path + size + mtime taken from the
   stat the walker already did; files modified within the last 2 seconds are never cached, so a
   file an agent just edited is always read fresh.
-- **Benchmarked.** `tools/*/bench_test.go` carry synthetic-tree benchmarks for the search path,
-  the scanner, the diff, and the cache. They are how the current design was chosen (and several
-  tempting optimisations were rejected — see below).
 - **Telemetry is local and boring.** `tool_stats` reads an append-only log in the user cache dir;
   delete the file to opt out. Nothing is sent anywhere.
 
-### Measured, on an Apple M4
+## Profiling
 
-| Benchmark | Result |
-|---|---|
-| truncated search over 120 files / 3600 funcs | 0.39 ms, 0.9 MB, 1.7k allocs |
-| full-tree scan, no match | 3.9 ms (2.9 ms warm cache) |
-| symbol extraction, 26k-line Go file | 4.1 ms vs `go/parser` 13.6 ms (3.1 MB vs 18.9 MB) |
-| unified diff, 200 scattered edits in 2000 lines | 0.17 ms vs 9.6 ms before |
-| byte scanning share of a full scan (CPU profile) | ~2% |
+Profile the benchmarks offline: compile the test binary once, then symbolise with the same binary.
 
-Run them yourself: `go test ./... -bench . -benchmem`.
+```sh
+go test -c -o /tmp/grepfunc.test ./tools/grepfunc
+/tmp/grepfunc.test -test.run '^$' -test.bench BenchmarkSearch -test.cpuprofile /tmp/cpu.out
+go tool pprof -top /tmp/grepfunc.test /tmp/cpu.out
+```
+
+A profile of the search path puts most of its CPU in file I/O syscalls and channel park/unpark,
+not in scanning.
 
 ## Caveats
 
@@ -239,7 +237,7 @@ Run them yourself: `go test ./... -bench . -benchmem`.
 ```sh
 go test ./...                              # all 15 packages
 go test ./tools/grepfunc -run Oracle -v    # scanner vs go/parser
-go test ./... -bench . -benchmem           # the numbers above
+go test ./... -bench . -benchmem           # benchmarks
 golangci-lint run ./... && gosec ./...     # no config committed; defaults are used
 ```
 

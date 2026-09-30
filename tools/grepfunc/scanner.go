@@ -235,9 +235,25 @@ func searchFile(root, path string, matcher *GlobMatcher, entry fs.DirEntry, patt
 		return nil, nil
 	}
 
-	rel, _ := filepath.Rel(root, path)
+	// The unrestricted default glob matches every path, so the relative path is
+	// only computed when there is a real glob to test.
+	if !matcher.IsDefault() {
+		rel, _ := filepath.Rel(root, path)
 
-	if !matcher.Match(rel) {
+		if !matcher.Match(rel) {
+			return nil, nil
+		}
+	}
+
+	// Extension filters run before the stat: a rejected file then costs no
+	// syscall at all, and non-source files are most of a repo's weight.
+	ext := strings.ToLower(filepath.Ext(path))
+	if IsBinaryExt(ext) {
+		return nil, nil
+	}
+
+	// When the glob is the unrestricted default, extension filtering applies.
+	if matcher.IsDefault() && IsNonSourceExt(ext) {
 		return nil, nil
 	}
 
@@ -247,15 +263,6 @@ func searchFile(root, path string, matcher *GlobMatcher, entry fs.DirEntry, patt
 	}
 
 	if info.Size() > 2*1024*1024 {
-		return nil, nil
-	}
-
-	ext := strings.ToLower(filepath.Ext(path))
-	if IsBinaryExt(ext) {
-		return nil, nil
-	}
-	// When the glob is the unrestricted default, extension filtering applies.
-	if matcher.IsDefault() && IsNonSourceExt(ext) {
 		return nil, nil
 	}
 
@@ -1391,7 +1398,7 @@ func insideQuote(str string, idx int) bool {
 }
 
 // IsStructSig detects struct/class/interface/enum/type definition signatures.
-// Matches: Go, Rust, TS/JS, Java, C/C++, C#, Python, Kotlin, Swift, etc.
+// Matches: Go, Rust, TS/JS, Java, C/C++, C#, Python, Mojo, Kotlin, Swift, etc.
 func IsStructSig(line []byte) bool {
 	sig := strings.TrimSpace(string(line))
 	if sig == "" || isCommentStart(sig) {
@@ -1861,9 +1868,18 @@ func blockMatchesPattern(lines [][]byte, start, end int, pattern *regexp.Regexp)
 	return false
 }
 
-// joinBlock joins lines [start, end] into a single body string.
+// joinBlock joins lines [start, end] into a single body string. The size is
+// known up front, so the builder allocates once instead of growing — this is the
+// body path's largest allocation (grep_func body=true, every block in grep_struct).
 func joinBlock(lines [][]byte, start, end int) string {
-	var body bytes.Buffer
+	size := end - start
+
+	for j := start; j <= end; j++ {
+		size += len(lines[j])
+	}
+
+	var body strings.Builder
+	body.Grow(size)
 
 	for j := start; j <= end; j++ {
 		if j > start {
