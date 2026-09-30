@@ -293,7 +293,9 @@ func SearchBoth(root, glob string, pattern *regexp.Regexp, limit int) ([]FuncMat
 			firstLine = firstLine[:nl]
 		}
 
-		if IsFuncSig(firstLine) {
+		// A declaration can satisfy both heuristics (Mojo struct Point(Trait):,
+		// Python class Foo(Base):): the type test wins so it is not filed as a func.
+		if !IsStructSig(firstLine) && IsFuncSig(firstLine) {
 			funcs = append(funcs, match)
 		} else {
 			types = append(types, match)
@@ -693,7 +695,7 @@ func extractBlocksData(filePath string, data []byte, pattern *regexp.Regexp, lim
 	// 40x more allocation-heavy (BenchmarkGoParserSymbols vs BraceScannerSymbols),
 	// and TestBraceScannerMatchesGoParser shows the two agree on real Go files.
 	// parseGoSymbols is kept as that oracle.
-	if isPythonExt(strings.ToLower(filepath.Ext(filePath))) {
+	if isIndentExt(strings.ToLower(filepath.Ext(filePath))) {
 		return extractBlocksIndent(lines, pattern, limit, sigFn, needBody)
 	}
 
@@ -839,9 +841,15 @@ func regexMatchesNewline(node *syntax.Regexp) bool {
 	return false
 }
 
-// isPythonExt reports whether ext belongs to a Python source file.
-func isPythonExt(ext string) bool {
-	return ext == ".py" || ext == ".pyi" || ext == ".pyx"
+// isIndentExt reports whether ext belongs to an indentation-based language
+// (Python, Mojo): blocks end where indentation drops, and # starts a comment.
+func isIndentExt(ext string) bool {
+	switch ext {
+	case ".py", ".pyi", ".pyx", ".mojo", ".🔥":
+		return true
+	default:
+		return false
+	}
 }
 
 // toLines splits data into lines, preserving the line content without trailing \n or \r.
@@ -1391,7 +1399,9 @@ func IsStructSig(line []byte) bool {
 	}
 
 	if !strings.ContainsAny(sig, "{:") {
-		return false
+		// A wrapped parametric declaration has neither yet: Mojo "struct Grid["
+		// continues "]:", so the opener bracket is all there is to see.
+		return isWrappedTypeDecl(sig)
 	}
 
 	if isGoTypeDecl(sig) || isRustTypeDecl(sig) || isPythonClass(sig) || isJSTypeDecl(sig) {
@@ -1399,6 +1409,22 @@ func IsStructSig(line []byte) bool {
 	}
 
 	return isModifierTypeDecl(stripTypeModifiers(sig))
+}
+
+// isWrappedTypeDecl matches a type declaration whose bracketed parameters wrap
+// to the next line, so this line ends with "[" and carries no colon or brace.
+func isWrappedTypeDecl(sig string) bool {
+	if !strings.HasSuffix(sig, "[") {
+		return false
+	}
+
+	for _, prefix := range []string{"struct ", "trait ", "pub struct ", "pub trait "} {
+		if strings.HasPrefix(sig, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isCommentStart reports whether s starts with a comment or directive marker.
@@ -1478,7 +1504,9 @@ func isFuncSigStart(sig string) bool {
 	// Must contain opening paren (function parameter list)
 	openParen := strings.Index(sig, "(")
 	if openParen < 0 {
-		return false
+		// Mojo wraps compile-time parameters before the argument list, leaving
+		// the declaration line parenless: "def _stored[" continues "](...)".
+		return isLangFuncKeyword(sig) && strings.Contains(sig, "[")
 	}
 
 	// A continuation line ("\tc int, d bool) error {") closes its parameter list
@@ -1703,14 +1731,30 @@ func arrowFuncName(sig string) string {
 	return ""
 }
 
-// extractBlocksIndent handles Python and other indent-based languages.
+// extractBlocksIndent handles Python, Mojo and other indent-based languages.
 func extractBlocksIndent(lines [][]byte, pattern *regexp.Regexp, limit int,
 	sigFn func([]byte) bool, needBody bool) ([]FuncMatch, error) {
 	var results []FuncMatch
 
 	seen := make(map[int]bool)
 
+	var doc []byte // triple-quote delimiter of the string the scan is inside
+
 	for lineIdx, line := range lines {
+		if doc != nil {
+			if bytes.Count(line, doc)%2 == 1 {
+				doc = nil
+			}
+
+			continue
+		}
+
+		if marker := docOpen(line); marker != nil {
+			doc = marker
+
+			continue
+		}
+
 		if !sigFn(line) {
 			continue
 		}
@@ -1749,6 +1793,32 @@ func extractBlocksIndent(lines [][]byte, pattern *regexp.Regexp, limit int,
 	}
 
 	return results, nil
+}
+
+// docMarkers are the triple-quoted string delimiters of indent-based languages.
+//
+//nolint:gochecknoglobals // fixed delimiters, never mutated
+var docMarkers = [][]byte{[]byte(`"""`), []byte(`'''`)}
+
+// docOpen reports the triple-quote delimiter a line opens, or nil. A delimiter
+// after a # comment does not count, and an odd count on the line means the
+// string runs past it. Heuristic, like the brace scanner's quote tracking: it
+// keeps signature-looking docstring examples from becoming phantom symbols.
+func docOpen(line []byte) []byte {
+	comment := bytes.IndexByte(line, '#')
+
+	for _, marker := range docMarkers {
+		idx := bytes.Index(line, marker)
+		if idx < 0 || (comment >= 0 && comment < idx) {
+			continue
+		}
+
+		if bytes.Count(line, marker)%2 == 1 {
+			return marker
+		}
+	}
+
+	return nil
 }
 
 // findIndentBlockEnd returns the last line index of the indented block starting at start.

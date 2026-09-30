@@ -23,6 +23,7 @@ const (
 	schemaInteger = "integer"
 	schemaBoolean = "boolean"
 	schemaText    = "text"
+	schemaArray   = "array"
 )
 
 // Caps for result sizes.
@@ -32,7 +33,7 @@ const (
 )
 
 // errPatternRequired is returned when no pattern is supplied.
-var errPatternRequired = errors.New("pattern is required")
+var errPatternRequired = errors.New("pattern or patterns is required")
 
 // Tool defines the grep_context MCP tool.
 //
@@ -47,6 +48,11 @@ var Tool = server.Tool{
 				Type:        schemaString,
 				Items:       nil,
 				Description: "Regex to search for.",
+			},
+			"patterns": {
+				Type:        schemaArray,
+				Items:       &server.Property{Type: schemaString, Items: nil},
+				Description: "Also match any of these regexes (union with pattern).",
 			},
 			"path": {
 				Type:        schemaString,
@@ -110,24 +116,25 @@ var Tool = server.Tool{
 			},
 		},
 		AdditionalProperties: false,
-		Required:             []string{"pattern"},
+		Required:             []string{},
 	},
 }
 
 type args struct {
-	Pattern       string `json:"pattern"`
-	Path          string `json:"path"`
-	Include       string `json:"include"`
-	ContextLines  int    `json:"context_lines"`
-	CaseSensitive bool   `json:"case_sensitive"`
-	MaxResults    int    `json:"max_results"`
-	Offset        int    `json:"offset"`
-	Compact       bool   `json:"compact"`
-	Scope         bool   `json:"scope"`
-	GroupByFile   bool   `json:"group_by_file"`
-	NamesOnly     bool   `json:"names_only"`
-	TokenBudget   int    `json:"token_budget"`
-	CountOnly     bool   `json:"count_only"`
+	Pattern       string   `json:"pattern"`
+	Patterns      []string `json:"patterns"`
+	Path          string   `json:"path"`
+	Include       string   `json:"include"`
+	ContextLines  int      `json:"context_lines"`
+	CaseSensitive bool     `json:"case_sensitive"`
+	MaxResults    int      `json:"max_results"`
+	Offset        int      `json:"offset"`
+	Compact       bool     `json:"compact"`
+	Scope         bool     `json:"scope"`
+	GroupByFile   bool     `json:"group_by_file"`
+	NamesOnly     bool     `json:"names_only"`
+	TokenBudget   int      `json:"token_budget"`
+	CountOnly     bool     `json:"count_only"`
 }
 
 type window struct {
@@ -148,11 +155,12 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if arg.Pattern == "" {
+	patterns := grepfunc.MergePatterns(arg.Pattern, arg.Patterns)
+	if len(patterns) == 0 {
 		return nil, errPatternRequired
 	}
 
-	patternRe, err := grepfunc.CompilePattern(arg.Pattern, arg.CaseSensitive)
+	patternRe, err := grepfunc.CompilePatterns(patterns, arg.CaseSensitive)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pattern: %w", err)
 	}
@@ -462,7 +470,7 @@ func renderCountOnly(arg args, all []window, total int, scannedAll bool) *server
 
 	var buf strings.Builder
 
-	fmt.Fprintf(&buf, "%d%s matches for %q\n", total, suffix, arg.Pattern)
+	fmt.Fprintf(&buf, "%d%s matches for %q\n", total, suffix, patternLabel(arg))
 
 	if total == 0 {
 		buf.WriteString(grepfunc.ZeroMatchHint(arg.Include))
@@ -482,12 +490,17 @@ func renderCountOnly(arg args, all []window, total int, scannedAll bool) *server
 	}
 }
 
+// patternLabel renders the effective pattern set (pattern + patterns) for result headers.
+func patternLabel(arg args) string {
+	return grepfunc.PatternLabel(grepfunc.MergePatterns(arg.Pattern, arg.Patterns))
+}
+
 // writeZeroMatches writes the header for an empty result set.
 func writeZeroMatches(buf *strings.Builder, arg args) {
 	if arg.Compact {
-		fmt.Fprintf(buf, "0 matches %q\n", arg.Pattern)
+		fmt.Fprintf(buf, "0 matches %q\n", patternLabel(arg))
 	} else {
-		fmt.Fprintf(buf, "0 matches for %q\n", arg.Pattern)
+		fmt.Fprintf(buf, "0 matches for %q\n", patternLabel(arg))
 	}
 
 	buf.WriteString(grepfunc.ZeroMatchHint(arg.Include))
@@ -496,9 +509,9 @@ func writeZeroMatches(buf *strings.Builder, arg args) {
 // writeMatchHeader writes the summary line and leading whitespace.
 func writeMatchHeader(buf *strings.Builder, arg args, total int, suffix string, start, end int) {
 	if arg.Compact {
-		fmt.Fprintf(buf, "%d%s matches %q", total, suffix, arg.Pattern)
+		fmt.Fprintf(buf, "%d%s matches %q", total, suffix, patternLabel(arg))
 	} else {
-		fmt.Fprintf(buf, "%d%s matches for %q", total, suffix, arg.Pattern)
+		fmt.Fprintf(buf, "%d%s matches for %q", total, suffix, patternLabel(arg))
 	}
 
 	if arg.Offset > 0 || end < total {
@@ -618,7 +631,7 @@ func writeWindowHeader(buf *strings.Builder, win window, groupByFile bool) {
 func terseOutput(arg args, page []window, total, start, end int, suffix string) string {
 	var terse strings.Builder
 
-	fmt.Fprintf(&terse, "%d%s matches %q", total, suffix, arg.Pattern)
+	fmt.Fprintf(&terse, "%d%s matches %q", total, suffix, patternLabel(arg))
 
 	if arg.Offset > 0 || end < total {
 		fmt.Fprintf(&terse, " (showing %d\u2013%d)", start+1, end)

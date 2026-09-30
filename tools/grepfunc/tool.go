@@ -13,14 +13,16 @@ import (
 
 // Schema keys and content types shared by the tool definition and callers.
 const (
-	schemaPattern = "pattern"
-	schemaPath    = "path"
-	schemaInclude = "include"
-	schemaString  = "string"
-	schemaInteger = "integer"
-	schemaBoolean = "boolean"
-	schemaBody    = "body"
-	schemaText    = "text"
+	schemaPattern  = "pattern"
+	schemaPatterns = "patterns"
+	schemaPath     = "path"
+	schemaInclude  = "include"
+	schemaString   = "string"
+	schemaArray    = "array"
+	schemaInteger  = "integer"
+	schemaBoolean  = "boolean"
+	schemaBody     = "body"
+	schemaText     = "text"
 )
 
 // Caps for search result sizes and previews.
@@ -35,7 +37,7 @@ const (
 )
 
 // errPatternRequired is returned when no pattern is supplied.
-var errPatternRequired = errors.New("pattern is required")
+var errPatternRequired = errors.New("pattern or patterns is required")
 
 // Tool defines the grep_func MCP tool.
 //
@@ -51,6 +53,11 @@ var Tool = server.Tool{
 				Type:        schemaString,
 				Items:       nil,
 				Description: "Regex on function names or bodies.",
+			},
+			schemaPatterns: {
+				Type:        schemaArray,
+				Items:       &server.Property{Type: schemaString, Items: nil},
+				Description: "Also match any of these regexes (union with pattern).",
 			},
 			schemaPath: {
 				Type:        schemaString,
@@ -143,30 +150,31 @@ var Tool = server.Tool{
 				Description: "Context lines around matches when symbol set. Default 2, max 8.",
 			},
 		},
-		Required: []string{schemaPattern},
+		Required: []string{},
 	},
 }
 
 type args struct {
-	Pattern        string `json:"pattern"`
-	Path           string `json:"path"`
-	Include        string `json:"include"`
-	MaxResults     int    `json:"max_results"`
-	Offset         int    `json:"offset"`
-	Body           bool   `json:"body"`
-	CaseSensitive  bool   `json:"case_sensitive"`
-	Summary        bool   `json:"summary"`
-	SummaryLines   int    `json:"summary_lines"`
-	NamesOnly      bool   `json:"names_only"`
-	IncludeTypes   bool   `json:"include_types"`
-	SigLines       int    `json:"sig_lines"`
-	Compact        bool   `json:"compact"`
-	Receiver       string `json:"receiver"`
-	GroupByFile    bool   `json:"group_by_file"`
-	TokenBudget    int    `json:"token_budget"`
-	ExcludePattern string `json:"exclude_pattern"`
-	Symbol         string `json:"symbol"`
-	ContextLines   int    `json:"context_lines"`
+	Pattern        string   `json:"pattern"`
+	Patterns       []string `json:"patterns"`
+	Path           string   `json:"path"`
+	Include        string   `json:"include"`
+	MaxResults     int      `json:"max_results"`
+	Offset         int      `json:"offset"`
+	Body           bool     `json:"body"`
+	CaseSensitive  bool     `json:"case_sensitive"`
+	Summary        bool     `json:"summary"`
+	SummaryLines   int      `json:"summary_lines"`
+	NamesOnly      bool     `json:"names_only"`
+	IncludeTypes   bool     `json:"include_types"`
+	SigLines       int      `json:"sig_lines"`
+	Compact        bool     `json:"compact"`
+	Receiver       string   `json:"receiver"`
+	GroupByFile    bool     `json:"group_by_file"`
+	TokenBudget    int      `json:"token_budget"`
+	ExcludePattern string   `json:"exclude_pattern"`
+	Symbol         string   `json:"symbol"`
+	ContextLines   int      `json:"context_lines"`
 }
 
 // FuncMatch is a matched function or type block extracted from a file.
@@ -189,7 +197,8 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if arg.Pattern == "" {
+	patterns := MergePatterns(arg.Pattern, arg.Patterns)
+	if len(patterns) == 0 {
 		return nil, errPatternRequired
 	}
 
@@ -199,7 +208,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		return nil, err
 	}
 
-	pattern, err := CompilePattern(arg.Pattern, arg.CaseSensitive)
+	pattern, err := CompilePatterns(patterns, arg.CaseSensitive)
 	if err != nil {
 		return nil, fmt.Errorf("invalid regex pattern: %w", err)
 	}
@@ -296,6 +305,11 @@ func searchMatches(arg args, pattern *regexp.Regexp, fetchMax int) ([]FuncMatch,
 	return results, nil, err
 }
 
+// patternLabel renders the effective pattern set (pattern + patterns) for result headers.
+func patternLabel(arg args) string {
+	return PatternLabel(MergePatterns(arg.Pattern, arg.Patterns))
+}
+
 // renderPaged applies pagination and the token budget to the final output.
 func renderPaged(arg args, all []FuncMatch, truncated bool) string {
 	total := len(all)
@@ -371,9 +385,9 @@ func renderResults(arg args, page []FuncMatch, total, start, end int, namesOnly,
 	}
 
 	if compact {
-		fmt.Fprintf(&buf, "%d%s %ss %q", total, marker, label, arg.Pattern)
+		fmt.Fprintf(&buf, "%d%s %ss %q", total, marker, label, patternLabel(arg))
 	} else {
-		fmt.Fprintf(&buf, "%d%s %ss matching %q", total, marker, label, arg.Pattern)
+		fmt.Fprintf(&buf, "%d%s %ss matching %q", total, marker, label, patternLabel(arg))
 	}
 
 	if total > arg.MaxResults || arg.Offset > 0 {
@@ -647,7 +661,7 @@ func scopedSearch(arg args, patRe *regexp.Regexp) (*server.ToolCallResult, error
 		return &server.ToolCallResult{
 			Content: []server.ToolCallContent{{
 				Type: schemaText,
-				Text: fmt.Sprintf("No matches for /%s/ inside %q.", arg.Pattern, arg.Symbol),
+				Text: fmt.Sprintf("No matches for /%s/ inside %q.", patternLabel(arg), arg.Symbol),
 			}},
 			IsError: false,
 		}, nil
@@ -736,7 +750,7 @@ func renderScopedSymbol(buf *strings.Builder, sym FuncMatch, arg args, patRe *re
 	}
 
 	fmt.Fprintf(buf, "%d matches for /%s/ in %q (%s:L%d-%d):\n\n",
-		len(hitIdxs), arg.Pattern, sym.Name, rel, startLine, sym.EndLine)
+		len(hitIdxs), patternLabel(arg), sym.Name, rel, startLine, sym.EndLine)
 
 	for _, w := range buildWindows(hitIdxs, ctx, len(bodyLines)-1) {
 		fmt.Fprintf(buf, "```%s\n", ext)

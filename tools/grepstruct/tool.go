@@ -15,6 +15,7 @@ import (
 
 const (
 	keyPattern          = "pattern"
+	keyPatterns         = "patterns"
 	keyInclude          = "include"
 	keyPath             = "path"
 	keyBody             = "body"
@@ -23,13 +24,14 @@ const (
 	typeString          = "string"
 	typeInteger         = "integer"
 	typeBoolean         = "boolean"
+	typeArray           = "array"
 	defaultMaxResults   = 15
 	maxMaxResults       = 50
 	maxFetchMax         = 200
 	defaultSummaryLines = 5
 )
 
-var errPatternRequired = errors.New("pattern is required")
+var errPatternRequired = errors.New("pattern or patterns is required")
 
 // Tool is the grep_struct MCP tool definition.
 //
@@ -41,6 +43,7 @@ var Tool = server.Tool{
 		Type: "object",
 		Properties: map[string]server.Property{
 			keyPattern:        {Type: typeString, Description: "Regex on type names or bodies.", Items: nil},
+			keyPatterns:       {Type: typeArray, Description: "Also match any of these regexes (union with pattern).", Items: &server.Property{Type: typeString, Items: nil}},
 			keyPath:           {Type: typeString, Description: "Directory to search. Defaults to project root.", Items: nil},
 			keyInclude:        {Type: typeString, Description: "Glob filter (** recursive). Auto: source extensions.", Items: nil},
 			"max_results":     {Type: typeInteger, Description: "Max definitions. Default 15, max 50.", Items: nil},
@@ -54,25 +57,26 @@ var Tool = server.Tool{
 			"exclude_pattern": {Type: typeString, Description: "Regex to exclude results (body/name).", Items: nil},
 			"token_budget":    {Type: typeInteger, Description: "Max output chars; truncates at line boundaries.", Items: nil},
 		},
-		Required:             []string{keyPattern},
+		Required:             []string{},
 		AdditionalProperties: false,
 	},
 }
 
 type args struct {
-	Pattern        string `json:"pattern"`
-	Path           string `json:"path"`
-	Include        string `json:"include"`
-	MaxResults     int    `json:"max_results"`
-	Offset         int    `json:"offset"`
-	Body           bool   `json:"body"`
-	CaseSensitive  bool   `json:"case_sensitive"`
-	Summary        bool   `json:"summary"`
-	SummaryLines   int    `json:"summary_lines"`
-	NamesOnly      bool   `json:"names_only"`
-	Compact        bool   `json:"compact"`
-	ExcludePattern string `json:"exclude_pattern"`
-	TokenBudget    int    `json:"token_budget"`
+	Pattern        string   `json:"pattern"`
+	Patterns       []string `json:"patterns"`
+	Path           string   `json:"path"`
+	Include        string   `json:"include"`
+	MaxResults     int      `json:"max_results"`
+	Offset         int      `json:"offset"`
+	Body           bool     `json:"body"`
+	CaseSensitive  bool     `json:"case_sensitive"`
+	Summary        bool     `json:"summary"`
+	SummaryLines   int      `json:"summary_lines"`
+	NamesOnly      bool     `json:"names_only"`
+	Compact        bool     `json:"compact"`
+	ExcludePattern string   `json:"exclude_pattern"`
+	TokenBudget    int      `json:"token_budget"`
 }
 
 // Handle processes a grep_struct tool call and returns the result.
@@ -91,7 +95,7 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 		fetchMax = min(arg.Offset+arg.MaxResults, maxFetchMax)
 	}
 
-	pattern, err := grepfunc.CompilePattern(arg.Pattern, arg.CaseSensitive)
+	pattern, err := grepfunc.CompilePatterns(grepfunc.MergePatterns(arg.Pattern, arg.Patterns), arg.CaseSensitive)
 	if err != nil {
 		return nil, fmt.Errorf("invalid regex pattern: %w", err)
 	}
@@ -123,13 +127,18 @@ func Handle(raw json.RawMessage) (*server.ToolCallResult, error) {
 	return server.BudgetResult(result, arg.TokenBudget), nil
 }
 
+// patternLabel renders the effective pattern set (pattern + patterns) for result headers.
+func patternLabel(arg args) string {
+	return grepfunc.PatternLabel(grepfunc.MergePatterns(arg.Pattern, arg.Patterns))
+}
+
 func renderResults(arg args, page []grepfunc.FuncMatch, total, start, end int) string {
 	var buf strings.Builder
 
 	if arg.Compact {
-		fmt.Fprintf(&buf, "%d defs %q", total, arg.Pattern)
+		fmt.Fprintf(&buf, "%d defs %q", total, patternLabel(arg))
 	} else {
-		fmt.Fprintf(&buf, "%d definitions matching %q", total, arg.Pattern)
+		fmt.Fprintf(&buf, "%d definitions matching %q", total, patternLabel(arg))
 	}
 
 	if total > arg.MaxResults || arg.Offset > 0 {
@@ -164,7 +173,7 @@ func parseArgs(raw json.RawMessage) (args, error) {
 		return arg, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if arg.Pattern == "" {
+	if len(grepfunc.MergePatterns(arg.Pattern, arg.Patterns)) == 0 {
 		return arg, errPatternRequired
 	}
 

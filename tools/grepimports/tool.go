@@ -300,7 +300,7 @@ func parseImports(data []byte, ext, filter string) []importEntry {
 	switch ext {
 	case ".go":
 		return parseGoImports(data, filter)
-	case ".py":
+	case ".py", ".mojo", ".🔥":
 		return parsePyImports(data, filter)
 	case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs":
 		return parseJSImports(data, filter)

@@ -166,7 +166,7 @@ are refused, and secret-looking paths are blocked outright.
 | `grep_context` | Matching lines with N lines of context, deduplicated windows, scope annotation. |
 | `grep_refs` | Every reference to a symbol: call sites, type usages, assignments. |
 | `grep_dead` | Declared symbols nothing references: private ones unused anywhere, exported ones unused outside their own file. |
-| `grep_imports` | Which files import a module, or what a file imports (Go/Python/JS/Rust). |
+| `grep_imports` | Which files import a module, or what a file imports (Go/Python/Mojo/JS/Rust). |
 | `grep_replace` | Regex find-and-replace across files, `$1` groups and `\n`/`\t` escapes, `dry_run` preview. |
 | `file_symbols` | Func/type definitions with line numbers, no bodies — map an unfamiliar file. |
 | `find_symbol` | Find a symbol by name: `file:line` + signature, with "did you mean" suggestions. |
@@ -181,7 +181,9 @@ are refused, and secret-looking paths are blocked outright.
 | `tool_stats` | Local usage telemetry: call counts, error rates, never-called tools. |
 
 Every tool takes a `token_budget`; most take `compact`, `names_only`, or `terse` renderings, and
-path-taking tools accept an `include` glob (`**/*.go`, `{go,sql}` sets supported).
+path-taking tools accept an `include` glob (`**/*.go`, `{go,sql}` sets supported). The content
+searchers (`grep_func`, `grep_struct`, `grep_context`) also take a `patterns` array, whose regexes
+are unioned into a single pass and reported under one label.
 
 ## What is unusual about it
 
@@ -222,8 +224,9 @@ Run them yourself: `go test ./... -bench . -benchmem`.
 - **It edits your files.** `patch_file` writes what you asked for and validates after writing.
   `git` `mode=restore` is the one destructive call: it reverts a file to HEAD, so it prints the
   diff it would drop and changes nothing until you pass `confirm=true`.
-- Symbol extraction is heuristic outside Go/Rust/JS/TS/Python-shaped code; when a `.go` file does
-  not parse it falls back to the brace scanner rather than failing.
+- Symbol extraction is heuristic outside Go/Rust/JS/TS/Python/Mojo-shaped code; when a `.go` file
+  does not parse it falls back to the brace scanner rather than failing. `.mojo` and `.🔥` files are
+  scanned as indentation blocks, with triple-quoted docstrings excluded from symbol candidates.
 - By default, searches skip known non-source formats (docs, data, lock/log/map files). Pass an
   `include` glob to search them.
 - The walk reads the **root** `.gitignore` only; nested per-directory ignore files are not applied,
