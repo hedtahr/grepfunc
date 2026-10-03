@@ -295,8 +295,10 @@ func searchMatches(arg args, pattern *regexp.Regexp, fetchMax int) ([]FuncMatch,
 	}
 
 	searchFn := Search
-	if arg.NamesOnly {
-		// Bodies are never rendered in names_only mode — don't build them.
+	if arg.NamesOnly && arg.Receiver == "" {
+		// Bodies are never rendered in names_only mode — don't build them. The
+		// receiver filter reads the receiver off the signature line, so a receiver
+		// search keeps them.
 		searchFn = SearchNames
 	}
 
@@ -542,14 +544,19 @@ func summarizeLines(n int) int {
 }
 
 func filterByReceiver(matches []FuncMatch, name string) []FuncMatch {
-	// Match Go: func (ident Type) method or func (ident *Type) method
-	pat := `\(\s*\*?\s*` + regexp.QuoteMeta(name) + `\s*\)`
+	// Go receiver clauses: (s *Server), (*Server), (s Server), (s *Server[T]). The
+	// receiver name is optional — every method written the usual way has one, so
+	// requiring it to be absent made this filter match nothing.
+	pat := `^func\s*\(\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)?\*?\s*` +
+		regexp.QuoteMeta(name) + `(?:\s*\[[^\]]*\])?\s*\)`
 	patRe := regexp.MustCompile(pat)
 
 	out := matches[:0]
 
 	for _, m := range matches {
-		if patRe.MatchString(m.Body) {
+		// Only the signature line can hold a receiver: a (*Server)(nil) conversion
+		// inside some other function's body is not a method on Server.
+		if patRe.MatchString(server.FirstLine(m.Body, 0)) {
 			out = append(out, m)
 		}
 	}

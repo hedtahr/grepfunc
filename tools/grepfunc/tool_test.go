@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hedtahr/grepfunc/server"
 	"go.uber.org/goleak"
 )
 
@@ -25,6 +26,24 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// Pin the sandbox boundary for the whole test binary. ResolvePath adopts the
+	// first absolute path it sees and locks as soon as a later path falls under
+	// it, so per-test temp dirs would lock each other out. One root with TMPDIR
+	// inside it keeps every Handle call in bounds and order-independent.
+	root, err := os.MkdirTemp("", "grepfunc-tests-")
+	if err != nil {
+		panic(err)
+	}
+
+	if err := os.Setenv("TMPDIR", root); err != nil {
+		panic(err)
+	}
+
+	server.ProjectRoot = root
+	server.LockProjectRoot()
+
+	// VerifyTestMain exits with the test status, so the temp root is left for the
+	// OS to reap rather than removed here.
 	goleak.VerifyTestMain(m)
 }
 
