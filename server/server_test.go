@@ -457,7 +457,7 @@ func TestPendingRootApplied(t *testing.T) {
 		t.Errorf("pendingRoot not cleared, got %q", v)
 	}
 
-	// Wait for the async persist/autoDiscover goroutines so TempDir cleanup is race-free.
+	// Wait for the async root persistence goroutine so TempDir cleanup is race-free.
 	memFile := filepath.Join(newRoot, ".llm", "memory.json")
 	deadline := time.Now().Add(2 * time.Second)
 

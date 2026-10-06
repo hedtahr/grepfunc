@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -323,7 +322,6 @@ func (s *Server) applyPendingRoot(queuedRoot string) {
 		fmt.Fprintf(os.Stderr, "[mcp] ProjectRoot=%s (roots/list, locked)\n", ProjectRoot)
 
 		go persistProjectRoot(queuedRoot)
-		go autoDiscover(queuedRoot)
 	}
 }
 
@@ -411,7 +409,6 @@ func (s *Server) finalizeRoot(root string, editorProvided bool, cwdAtStart, exeP
 
 	if root != "" {
 		go persistProjectRoot(root)
-		go autoDiscover(root)
 	}
 }
 
@@ -574,7 +571,6 @@ func (s *Server) switchProjectRoot(newRoot string) {
 
 	if wasEmpty {
 		go persistProjectRoot(newRoot)
-		go autoDiscover(newRoot)
 	}
 }
 
@@ -1035,44 +1031,6 @@ func FindProjectRoot(dir string) string {
 	}
 }
 
-// autoDiscover scans the project root and persists facts the AI needs every session.
-// Runs async on initialize so the AI doesn't have to re-discover them.
-func autoDiscover(root string) {
-	facts := make(map[string]string)
-
-	detectLanguage(root, facts)
-
-	// Available tools
-	for _, tool := range []string{"gofmt", "go", "prettier", "rustfmt", "ruff", "python3"} {
-		_, err := exec.LookPath(tool)
-		if err == nil {
-			facts["server.tool."+tool] = "available"
-		}
-	}
-
-	if len(facts) == 0 {
-		return
-	}
-
-	mem := readMemStore(root)
-
-	// Remove stale server.* entries before writing (dedup with persistProjectRoot)
-	filtered := mem.Entries[:0]
-
-	for _, e := range mem.Entries {
-		if !strings.HasPrefix(e.Key, "server.") {
-			filtered = append(filtered, e)
-		}
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	for k, v := range facts {
-		filtered = append([]memEntry{{Key: k, Value: v, At: now}}, filtered...)
-	}
-
-	writeMemStore(root, filtered)
-}
-
 // memEntry is one key/value record in the project's memory store.
 type memEntry struct {
 	Key   string `json:"key"`
@@ -1114,87 +1072,4 @@ func writeMemStore(root string, entries []memEntry) {
 
 	// #nosec G304 -- memPath is derived from the locked project root
 	_ = os.WriteFile(memPath, out, filePermPrivate)
-}
-
-// detectLanguage records language facts from project marker files.
-func detectLanguage(root string, facts map[string]string) {
-	// #nosec G304 -- root is the server's project root
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err == nil {
-		facts["server.lang"] = "go"
-
-		for line := range strings.SplitSeq(string(data), "\n") {
-			if v, ok := strings.CutPrefix(line, "go "); ok {
-				facts["server.go_version"] = strings.TrimSpace(v)
-
-				break
-			}
-		}
-
-		return
-	}
-
-	// #nosec G703 -- paths are bounds-checked via CheckBounds/CheckBanned
-	_, err = os.Stat(filepath.Join(root, "package.json"))
-	if err == nil {
-		facts["server.lang"] = "js/ts"
-
-		return
-	}
-
-	_, err = os.Stat(filepath.Join(root, "Cargo.toml"))
-	if err == nil {
-		facts["server.lang"] = "rust"
-
-		return
-	}
-
-	// A Mojo project is one whose manifest depends on mojo (pixi add mojo,
-	// uv add mojo). Magic and its magic.toml are retired, so no file name can
-	// be trusted: read the manifest.
-	if manifestDeclaresMojo(root, "pixi.toml") || manifestDeclaresMojo(root, "pyproject.toml") {
-		facts["server.lang"] = "mojo"
-
-		return
-	}
-
-	_, err = os.Stat(filepath.Join(root, "pyproject.toml"))
-	if err == nil {
-		facts["server.lang"] = "python"
-	}
-}
-
-// manifestDeclaresMojo reports whether the named manifest declares mojo as a
-// dependency, as a whole word: `mojo = "*"` (pixi) or `"mojo>=1.0"` (PEP 621).
-func manifestDeclaresMojo(root, name string) bool {
-	// #nosec G304 -- root is the server's project root
-	data, err := os.ReadFile(filepath.Join(root, name))
-	if err != nil {
-		return false
-	}
-
-	return containsWord(data, "mojo")
-}
-
-// containsWord reports whether data contains word delimited by non-word bytes,
-// so a dependency on mojolicious is not a dependency on mojo.
-func containsWord(data []byte, word string) bool {
-	for i := 0; ; {
-		idx := bytes.Index(data[i:], []byte(word))
-		if idx < 0 {
-			return false
-		}
-
-		start, end := i+idx, i+idx+len(word)
-		if (start == 0 || !isWordByte(data[start-1])) && (end == len(data) || !isWordByte(data[end])) {
-			return true
-		}
-
-		i = end
-	}
-}
-
-// isWordByte reports whether b can appear inside an identifier or version spec.
-func isWordByte(b byte) bool {
-	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
 }
