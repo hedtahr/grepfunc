@@ -81,7 +81,6 @@ const (
 
 	memoryDirMode  = 0700
 	memoryFileMode = 0600
-	gitignoreMode  = 0600
 
 	pathKey     = "path"
 	keyField    = "key"
@@ -236,7 +235,7 @@ func handleSave(mem store, path, key, value string, merge bool) (*server.ToolCal
 	}
 
 	root := filepath.Dir(filepath.Dir(path)) // memory.json is at root/.llm/memory.json.
-	ensureGitignore(root)
+	server.EnsureGitignore(root)
 
 	return textResult(fmt.Sprintf("Saved %q.", key)), nil
 }
@@ -471,34 +470,4 @@ func removeKey(mem store, key string) store {
 	mem.Entries = filtered
 
 	return mem
-}
-
-// ensureGitignore adds a .llm/ entry to the project .gitignore so memories stay local.
-func ensureGitignore(root string) {
-	gitignorePath := filepath.Join(root, ".gitignore")
-
-	// #nosec G304 -- paths bounds-checked by server
-	data, err := os.ReadFile(gitignorePath)
-	if err != nil {
-		data = nil
-	}
-
-	if strings.Contains(string(data), ".llm") {
-		return
-	}
-
-	// #nosec G304 -- paths bounds-checked by server
-	file, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, gitignoreMode)
-	if err != nil {
-		return
-	}
-
-	defer func() { _ = file.Close() }()
-
-	// Append .llm/ entry.
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		_, _ = file.WriteString("\n")
-	}
-
-	_, _ = file.WriteString(".llm/\n")
 }

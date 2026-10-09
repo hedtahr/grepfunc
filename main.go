@@ -9,6 +9,7 @@ import (
 	"github.com/hedtahr/grepfunc/server"
 	"github.com/hedtahr/grepfunc/tools/deletesymbol"
 
+	"github.com/hedtahr/grepfunc/tools/bookmark"
 	"github.com/hedtahr/grepfunc/tools/filestats"
 	"github.com/hedtahr/grepfunc/tools/filesymbols"
 	"github.com/hedtahr/grepfunc/tools/findrelated"
@@ -50,6 +51,7 @@ func main() {
 	srv.Register(findrelated.Tool, findrelated.Handle)
 	srv.Register(findsymbol.Tool, findsymbol.Handle)
 	srv.Register(memory.Tool, memory.Handle)
+	srv.Register(bookmark.Tool, bookmark.Handle)
 	srv.Register(filesymbols.Tool, filesymbols.Handle)
 	srv.Register(filestats.Tool, filestats.Handle)
 	srv.Register(grepimports.Tool, grepimports.Handle)
