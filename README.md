@@ -3,7 +3,7 @@
 A local [MCP](https://modelcontextprotocol.io) server that gives coding agents **grep that
 returns whole function bodies** and an **edit tool that survives being given slightly wrong
 text that survives being given slightly wrong
-text**. 22 tools, stdio, no daemon, no index, no cgo.
+text**. 20 tools, stdio, no daemon, no index, no cgo.
 
 ## Why I built this
 
@@ -27,8 +27,8 @@ first tool here is `patch_file`:
 **whole enclosing function** — its signature, where it starts, where it ends, what it returns.
 Line-oriented grep hides exactly that. `grep_func` returns brace-aware **bodies** for the
 functions that match (`body=true` for full bodies), and the symbol tools answer the questions
-that a plain grep turns into ten round trips: `symbol_at` (what function is this line in),
-`file_symbols`, `find_symbol`, `grep_refs`, `grep_dead`, `grep_imports`, `grep_struct`.
+that a plain grep turns into ten round trips: `file_symbols`, `find_symbol`, `grep_refs`,
+`grep_dead`, `grep_imports`, `grep_struct`.
 
 The rest exists because agent sessions kept needing it: `memory` (project conventions that
 survive sessions), `bookmark` (session-handoff pointers into the doc that holds current work),
@@ -76,7 +76,7 @@ agents over ACP as well.
 
 **The profile trick that fixes the original problem.** Models reach for the built-in editor
 unless it is unavailable. A profile that turns `edit_file` off and enables grepfunc's tools
-makes them use `patch_file` instead (enable the rest of the 22 as you need them):
+makes them use `patch_file` instead (enable the rest of the 20 as you need them):
 
 ```json
 {
@@ -95,7 +95,6 @@ makes them use `patch_file` instead (enable the rest of the 22 as you need them)
               "multi_read": true,
               "file_symbols": true,
               "find_symbol": true,
-              "symbol_at": true,
               "grep_refs": true
             }
           }
@@ -172,8 +171,6 @@ are refused, and secret-looking paths are blocked outright.
 | `grep_replace` | Regex find-and-replace across files, `$1` groups and `\n`/`\t` escapes, `dry_run` preview. |
 | `file_symbols` | Func/type definitions with line numbers, no bodies — map an unfamiliar file. |
 | `find_symbol` | Find a symbol by name: `file:line` + signature, with "did you mean" suggestions. |
-| `symbol_at` | The function/type enclosing a line — name, kind, start/end lines. |
-| `find_related` | Related files: tests, mocks, siblings, same-named files nearby. |
 | `file_stats` | Project overview: file/line counts, extension breakdown per directory. |
 | `multi_read` | Read files, globs, and line ranges in one call; reports total line counts. |
 | `write_file` | Create or fully overwrite a file (prefer `patch_file` for surgical edits). |
@@ -181,6 +178,9 @@ are refused, and secret-looking paths are blocked outright.
 | `git` | `mode=context` (branch, commits, status, `diff --stat`), `mode=diff` (staged/base/stat_only), `mode=restore` (revert a file to HEAD; reports the diff it would discard and needs `confirm=true`). |
 | `memory` | Remember/recall project conventions across sessions. |
 | `bookmark` | Bookmark current state/progress of work: the doc sections recording what is being done, where it stands, what is next. No args → read (line ranges + git drift; moved sections repaired, missing dropped); `set` path+refs (`≤4 "label=heading"`); `clear`. |
+
+Kept in-tree but not registered: `find_related`, `symbol_at`, `tool_stats` — the packages and
+their tests still build; re-register in `main.go` for clients that do not prune tools by profile.
 
 Every tool except `bookmark` takes a `token_budget`; most take `compact`, `names_only`, or `terse` renderings, and
 path-taking tools accept an `include` glob (`**/*.go`, `{go,sql}` sets supported). The content

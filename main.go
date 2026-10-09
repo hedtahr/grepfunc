@@ -12,7 +12,6 @@ import (
 	"github.com/hedtahr/grepfunc/tools/bookmark"
 	"github.com/hedtahr/grepfunc/tools/filestats"
 	"github.com/hedtahr/grepfunc/tools/filesymbols"
-	"github.com/hedtahr/grepfunc/tools/findrelated"
 	"github.com/hedtahr/grepfunc/tools/findsymbol"
 	"github.com/hedtahr/grepfunc/tools/gitcontext"
 	"github.com/hedtahr/grepfunc/tools/grepcontext"
@@ -28,7 +27,6 @@ import (
 	"github.com/hedtahr/grepfunc/tools/patchedit"
 
 	"github.com/hedtahr/grepfunc/tools/renamesymbol"
-	"github.com/hedtahr/grepfunc/tools/symbolat"
 	"github.com/hedtahr/grepfunc/tools/writefile"
 )
 
@@ -47,7 +45,6 @@ func main() {
 	srv.Register(grepstruct.Tool, grepstruct.Handle)
 	srv.Register(grepcontext.Tool, grepcontext.Handle)
 
-	srv.Register(findrelated.Tool, findrelated.Handle)
 	srv.Register(findsymbol.Tool, findsymbol.Handle)
 	srv.Register(memory.Tool, memory.Handle)
 	srv.Register(bookmark.Tool, bookmark.Handle)
@@ -62,7 +59,6 @@ func main() {
 	srv.Register(deletesymbol.Tool, deletesymbol.Handle)
 	srv.Register(renamesymbol.Tool, renamesymbol.Handle)
 	srv.Register(multiread.Tool, multiread.Handle)
-	srv.Register(symbolat.Tool, symbolat.Handle)
 	srv.Register(movesymbol.Tool, movesymbol.Handle)
 	srv.Register(grepreplace.Tool, grepreplace.Handle)
 	srv.Register(writefile.Tool, writefile.Handle)
