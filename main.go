@@ -29,7 +29,6 @@ import (
 
 	"github.com/hedtahr/grepfunc/tools/renamesymbol"
 	"github.com/hedtahr/grepfunc/tools/symbolat"
-	"github.com/hedtahr/grepfunc/tools/toolstats"
 	"github.com/hedtahr/grepfunc/tools/writefile"
 )
 
@@ -66,7 +65,6 @@ func main() {
 	srv.Register(symbolat.Tool, symbolat.Handle)
 	srv.Register(movesymbol.Tool, movesymbol.Handle)
 	srv.Register(grepreplace.Tool, grepreplace.Handle)
-	srv.Register(toolstats.Tool, toolstats.Handle)
 	srv.Register(writefile.Tool, writefile.Handle)
 
 	if err := srv.Run(); err != nil {

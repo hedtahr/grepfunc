@@ -77,6 +77,7 @@ func statsDir() string {
 }
 
 // StatsLogPath returns the global telemetry log path (user cache dir, shared by all projects).
+// Used by tools/toolstats, which is kept in-tree but not registered as an MCP tool.
 func StatsLogPath() string {
 	return filepath.Join(statsDir(), "toolstats.log")
 }

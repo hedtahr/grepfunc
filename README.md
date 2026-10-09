@@ -3,7 +3,7 @@
 A local [MCP](https://modelcontextprotocol.io) server that gives coding agents **grep that
 returns whole function bodies** and an **edit tool that survives being given slightly wrong
 text that survives being given slightly wrong
-text**. 23 tools, stdio, no daemon, no index, no cgo.
+text**. 22 tools, stdio, no daemon, no index, no cgo.
 
 ## Why I built this
 
@@ -32,7 +32,7 @@ that a plain grep turns into ten round trips: `symbol_at` (what function is this
 
 The rest exists because agent sessions kept needing it: `memory` (project conventions that
 survive sessions), `bookmark` (session-handoff pointers into the doc that holds current work),
-`multi_read`, `file_stats`, `git`, `tool_stats`.
+`multi_read`, `file_stats`, `git`.
 
 ## Install
 
@@ -76,7 +76,7 @@ agents over ACP as well.
 
 **The profile trick that fixes the original problem.** Models reach for the built-in editor
 unless it is unavailable. A profile that turns `edit_file` off and enables grepfunc's tools
-makes them use `patch_file` instead (enable the rest of the 23 as you need them):
+makes them use `patch_file` instead (enable the rest of the 22 as you need them):
 
 ```json
 {
@@ -180,8 +180,7 @@ are refused, and secret-looking paths are blocked outright.
 | `move_symbol` / `rename_symbol` / `delete_symbol` | Move, rename project-wide, or delete a named symbol. |
 | `git` | `mode=context` (branch, commits, status, `diff --stat`), `mode=diff` (staged/base/stat_only), `mode=restore` (revert a file to HEAD; reports the diff it would discard and needs `confirm=true`). |
 | `memory` | Remember/recall project conventions across sessions. |
-| `bookmark` | Session handoff: bookmark doc sections describing current work. No args → read (heading→line ranges, git drift, mark repair, dead-ref eviction); `set` path+refs (`≤4 "label=heading"`); `clear`. |
-| `tool_stats` | Local usage telemetry: call counts, error rates, never-called tools. |
+| `bookmark` | Bookmark current state/progress of work: the doc sections recording what is being done, where it stands, what is next. No args → read (line ranges + git drift; moved sections repaired, missing dropped); `set` path+refs (`≤4 "label=heading"`); `clear`. |
 
 Every tool except `bookmark` takes a `token_budget`; most take `compact`, `names_only`, or `terse` renderings, and
 path-taking tools accept an `include` glob (`**/*.go`, `{go,sql}` sets supported). The content
@@ -204,8 +203,9 @@ are unioned into a single pass and reported under one label.
 - **Read cache with a stability window.** Reads are keyed by path + size + mtime taken from the
   stat the walker already did; files modified within the last 2 seconds are never cached, so a
   file an agent just edited is always read fresh.
-- **Telemetry is local and boring.** `tool_stats` reads an append-only log in the user cache dir;
-  delete the file to opt out. Nothing is sent anywhere.
+- **Telemetry is local and silent.** One append-only line per call lands in the user cache dir
+  (`toolstats.log`); it is not registered as a tool and nothing is sent anywhere — inspect or delete
+  the file yourself (`tools/toolstats` is kept in-tree for that).
 
 ## Profiling
 
