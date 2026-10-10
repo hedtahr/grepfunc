@@ -478,6 +478,8 @@ func singleMatchResult(result editResult, content []byte, editOp EditOp, locs []
 		}
 	}
 
+	locs[0] = adjustFuzzySpan(content, locs[0], editOp.NewText)
+
 	result.Success = true
 	result.Matches = locs
 	result.LinesChanged = locs[0].LineEnd - locs[0].LineStart + 1
@@ -677,7 +679,7 @@ func buildResponse(path string, original, current []byte, reformatted bool, resu
 
 	var buf bytes.Buffer
 
-	writeHeader(&buf, path, reformatted, successCount, len(results))
+	writeHeader(&buf, path, reformatted, successCount, len(results), fuzzyTier(results))
 
 	if dryRun {
 		writeEditTable(&buf, results, true)
@@ -732,6 +734,11 @@ func terseResponse(path string, current []byte, results []editResult, dryRun, sk
 		}, nil
 	}
 
+	tierNote := ""
+	if tier := fuzzyTier(results); tier != "" {
+		tierNote = " (" + tier + ")"
+	}
+
 	if !dryRun {
 		err := atomicWrite(path, current)
 		if err != nil {
@@ -745,7 +752,7 @@ func terseResponse(path string, current []byte, results []editResult, dryRun, sk
 
 		if !skipValidate {
 			if result := runValidate(path); result != "" {
-				msg := fmt.Sprintf("[OK] %d/%d applied — validation: %s", successCount, len(results), result)
+				msg := fmt.Sprintf("[OK] %d/%d applied — validation: %s%s", successCount, len(results), result, tierNote)
 
 				return &server.ToolCallResult{
 					Content: []server.ToolCallContent{{Type: contentTypeText, Text: msg}},
@@ -755,9 +762,9 @@ func terseResponse(path string, current []byte, results []editResult, dryRun, sk
 		}
 	}
 
-	msg := fmt.Sprintf("[OK] %d/%d edits applied to %s", successCount, len(results), path)
+	msg := fmt.Sprintf("[OK] %d/%d edits applied to %s%s", successCount, len(results), path, tierNote)
 	if dryRun {
-		msg = fmt.Sprintf("[DRY RUN] %d/%d edits would apply to %s", successCount, len(results), path)
+		msg = fmt.Sprintf("[DRY RUN] %d/%d edits would apply to %s%s", successCount, len(results), path, tierNote)
 	}
 
 	return &server.ToolCallResult{
@@ -820,11 +827,15 @@ func joinErrors(results []editResult) string {
 	return strings.Join(errs, "; ")
 }
 
-func writeHeader(buf *bytes.Buffer, path string, reformatted bool, successCount, total int) {
+func writeHeader(buf *bytes.Buffer, path string, reformatted bool, successCount, total int, tier string) {
 	fmt.Fprintf(buf, "%s — %d/%d", server.RelPath(path), successCount, total)
 
 	if reformatted {
 		buf.WriteString(" (reformatted)")
+	}
+
+	if tier != "" {
+		fmt.Fprintf(buf, " (%s)", tier)
 	}
 
 	buf.WriteString("\n")
@@ -939,6 +950,55 @@ func atomicWrite(path string, content []byte) error {
 	}
 
 	return nil
+}
+
+// adjustFuzzySpan extends a whitespace-fuzzy match back to the start of its
+// line when the replacement text is itself indented: the file's leading
+// whitespace is then replaced instead of kept and doubled (observed: 8 spaces
+// + 16 spaces = 24). Unindented replacements keep the existing indentation.
+func adjustFuzzySpan(content []byte, loc MatchLoc, newText string) MatchLoc {
+	if loc.Strategy != strategyWhitespaceFuzzy {
+		return loc
+	}
+
+	if !strings.HasPrefix(newText, " ") && !strings.HasPrefix(newText, "\t") {
+		return loc
+	}
+
+	lineStart := bytes.LastIndexByte(content[:loc.Offset], '\n') + 1
+	if strings.TrimSpace(string(content[lineStart:loc.Offset])) != "" {
+		return loc
+	}
+
+	loc.Offset = lineStart
+
+	return loc
+}
+
+// fuzzyTier returns the lowest-confidence match tier used by successful edits,
+// or "" when every match was exact or a plain insert. Surfaced in summaries so
+// a fuzzy splice never looks identical to an exact one.
+func fuzzyTier(results []editResult) string {
+	worst := ""
+
+	for _, r := range results {
+		if !r.Success || len(r.Matches) == 0 {
+			continue
+		}
+
+		switch r.Matches[0].Strategy {
+		case strategySubstringFuzzy:
+			return strategySubstringFuzzy
+		case strategyLineFuzzy:
+			worst = strategyLineFuzzy
+		case strategyWhitespaceFuzzy:
+			if worst == "" {
+				worst = strategyWhitespaceFuzzy
+			}
+		}
+	}
+
+	return worst
 }
 
 // #15: confidence tier annotation.

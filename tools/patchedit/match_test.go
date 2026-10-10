@@ -87,6 +87,26 @@ func TestLineFuzzyMatch(t *testing.T) {
 	}
 }
 
+// Regression: a short file line that is merely a substring of a long search
+// line ("w" inside "BindKind::View") must not match. Near-equal pairs are
+// tolerated in either direction; tiny fragments standing in for a full line
+// are not.
+func TestLineFuzzyRejectsTinySubsetLine(t *testing.T) {
+	content := []byte("fn g(t: T) -> Vec<u8> {\n" +
+		"    let w = t.words();\n" +
+		"    if w.len() <= 1 {\n" +
+		"        w\n" +
+		"    } else {\n" +
+		"        vec![8]\n" +
+		"    }\n" +
+		"}\n")
+
+	locs := lineFuzzyMatch(content, "                kind: BindKind::View,")
+	if len(locs) != 0 {
+		t.Fatalf("tiny subset line must not match, got %v", locs)
+	}
+}
+
 func TestOffsetToLines(t *testing.T) {
 	content := []byte("line1\nline2\nline3\n")
 	lineTable := buildLineTable(content)

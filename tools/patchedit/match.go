@@ -13,6 +13,12 @@ const (
 	maxPreviewLineLen      = 80
 	previewLineLen         = 60
 
+	// minLineCoverage is the smallest share of a line's length that a
+	// containment pair may cover. It keeps a tiny file line ("w") from
+	// standing in for a long search line ("kind: BindKind::View,") while
+	// still tolerating near-equal pairs in either direction.
+	minLineCoverage = 0.6
+
 	strategyExact           = "exact"
 	strategyWhitespaceFuzzy = "whitespace_fuzzy"
 	strategyLineFuzzy       = "line_fuzzy"
@@ -243,16 +249,37 @@ func splitLinesWithOffsets(content []byte) ([]string, []int) {
 }
 
 func lineMatchesAt(lines, nonEmpty []string, lineIdx int, first string) bool {
-	trimLine := strings.TrimSpace(lines[lineIdx])
-	if trimLine == "" || first == "" {
-		return false
-	}
-
-	if !strings.Contains(trimLine, first) && !strings.Contains(first, trimLine) {
+	if !linePairMatches(strings.TrimSpace(lines[lineIdx]), first) {
 		return false
 	}
 
 	return restLinesMatch(lines, nonEmpty, lineIdx)
+}
+
+// linePairMatches reports whether a file line and a search line are the same
+// line. One must contain the other, and the shorter must cover at least
+// minLineCoverage of the longer: a short fragment must never stand in for a
+// full line (a file line "w" used to match "kind: BindKind::View," because
+// "View" contains "w").
+func linePairMatches(fileLine, searchLine string) bool {
+	if fileLine == "" || searchLine == "" {
+		return false
+	}
+
+	if fileLine == searchLine {
+		return true
+	}
+
+	shorter, longer := fileLine, searchLine
+	if len(shorter) > len(longer) {
+		shorter, longer = longer, shorter
+	}
+
+	if !strings.Contains(longer, shorter) {
+		return false
+	}
+
+	return float64(len(shorter)) >= minLineCoverage*float64(len(longer))
 }
 
 func restLinesMatch(lines, nonEmpty []string, lineIdx int) bool {
@@ -264,7 +291,7 @@ func restLinesMatch(lines, nonEmpty []string, lineIdx int) bool {
 			return false
 		}
 
-		if !strings.Contains(trimFile, trimOld) && !strings.Contains(trimOld, trimFile) {
+		if !linePairMatches(trimFile, trimOld) {
 			return false
 		}
 	}

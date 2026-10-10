@@ -72,6 +72,7 @@ type fileResult struct {
 	total    int
 	failures []string
 	diff     string
+	tier     string
 	skipped  bool
 }
 
@@ -281,10 +282,15 @@ func writeBatchRow(buf *strings.Builder, fileRes fileResult) {
 		return
 	}
 
+	suffix := ""
+	if fileRes.tier != "" {
+		suffix = " (" + fileRes.tier + ")"
+	}
+
 	if fileRes.applied == fileRes.total && len(fileRes.failures) == 0 {
-		fmt.Fprintf(buf, "- %s: %d/%d edits\n", fileRes.rel, fileRes.applied, fileRes.total)
+		fmt.Fprintf(buf, "- %s: %d/%d edits%s\n", fileRes.rel, fileRes.applied, fileRes.total, suffix)
 	} else {
-		fmt.Fprintf(buf, "- %s: %d/%d edits", fileRes.rel, fileRes.applied, fileRes.total)
+		fmt.Fprintf(buf, "- %s: %d/%d edits%s", fileRes.rel, fileRes.applied, fileRes.total, suffix)
 
 		if len(fileRes.failures) > 0 {
 			fmt.Fprintf(buf, " (%s)", strings.Join(fileRes.failures, "; "))
@@ -326,6 +332,7 @@ func processBatchFile(path string, args batchArgs) *fileResult {
 
 	applied, current := applySuccessful(content, results)
 	fileRes.applied = applied
+	fileRes.tier = fuzzyTier(results)
 
 	if applied == 0 {
 		return nil

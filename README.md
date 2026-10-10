@@ -14,7 +14,8 @@ when it did match it often wrote something subtly different from what was asked 
 first tool here is `patch_file`:
 
 - matches `old_text` **fuzzily** — exact, whitespace-insensitive, line-fuzzy, then
-  substring-fuzzy with a coverage threshold — and refuses ambiguity instead of guessing
+  substring-fuzzy, each fuzzy tier carrying a coverage or similarity floor — and refuses
+  ambiguity instead of guessing
   (`AMBIGUOUS_MATCH` lists every candidate line);
 - matches **the bytes on disk**, never a formatted copy;
 - applies every replacement from offsets taken against the original file, so a `replace_all`
