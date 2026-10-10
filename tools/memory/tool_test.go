@@ -242,6 +242,110 @@ func saveKV(t *testing.T, key, value string) {
 	}
 }
 
+func recallValue(t *testing.T, key string) string {
+	t.Helper()
+
+	result, err := Handle(marshalArgs(t, map[string]any{keyField: key}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return result.Content[0].Text
+}
+
+func TestBatchSaveItems(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	result, err := Handle(marshalArgs(t, map[string]any{
+		"items": []string{"a=alpha", "b=beta=with-equals"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(result.Content[0].Text, "Saved 2 keys") {
+		t.Errorf("batch save should report both keys, got %q", result.Content[0].Text)
+	}
+
+	if got := recallValue(t, "a"); got != "alpha" {
+		t.Errorf("a = %q, want alpha", got)
+	}
+
+	if got := recallValue(t, "b"); got != "beta=with-equals" {
+		t.Errorf("value must keep '=' after the first, got %q", got)
+	}
+}
+
+func TestBatchSaveNamespaceAndMerge(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	_, err := Handle(marshalArgs(t, map[string]any{
+		"items":     []string{"k=one"},
+		"namespace": "ns",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Handle(marshalArgs(t, map[string]any{
+		"items":     []string{"k=two"},
+		"namespace": "ns",
+		"merge":     true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := recallValue(t, "ns.k"); got != "one, two" {
+		t.Errorf("namespace+merge = %q, want %q", got, "one, two")
+	}
+}
+
+func TestBatchSaveSkipsBadItems(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	result, err := Handle(marshalArgs(t, map[string]any{
+		"items": []string{"good=1", "bad", "empty=", "=x"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Saved 1 key") || !strings.Contains(text, "skipped") {
+		t.Errorf("bad items should be skipped and reported, got %q", text)
+	}
+
+	if got := recallValue(t, "good"); got != "1" {
+		t.Errorf("good = %q, want 1", got)
+	}
+}
+
+func TestBatchSaveNothingIsError(t *testing.T) {
+	origPath := storePath
+	fp := filepath.Join(t.TempDir(), "memory.json")
+
+	storePath = func(_ string) (string, error) { return fp, nil }
+	defer func() { storePath = origPath }()
+
+	_, err := Handle(marshalArgs(t, map[string]any{"items": []string{"bad", "=x"}}))
+	if err == nil || !strings.Contains(err.Error(), "nothing saved") {
+		t.Errorf("all-bad batch should error, got %v", err)
+	}
+}
+
 func TestListDefaultCap(t *testing.T) {
 	origPath := storePath
 	fp := filepath.Join(t.TempDir(), "memory.json")

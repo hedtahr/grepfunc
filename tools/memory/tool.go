@@ -17,7 +17,7 @@ import (
 //nolint:gochecknoglobals // MCP tool definition
 var Tool = server.Tool{
 	Name:        "memory",
-	Description: "Remember/recall project conventions across sessions. No args → recall; key+value → save. Store only invariants (style, naming, architecture).",
+	Description: "Remember/recall project conventions across sessions. No args → recall; key+value or items=[\"k=v\"] → save. Store only invariants (style, naming, architecture).",
 	InputSchema: server.InputSchema{
 		Type: "object",
 		Properties: map[string]server.Property{
@@ -35,6 +35,11 @@ var Tool = server.Tool{
 				Type:        typeString,
 				Description: "Value to store. Required when saving.",
 				Items:       nil,
+			},
+			"items": {
+				Type:        typeArray,
+				Description: "Batch save: each \"key=value\". Same rules as key+value, one call.",
+				Items:       &server.Property{Type: typeString},
 			},
 			"delete": {Type: typeBoolean, Description: "Set true to forget this key.", Items: nil},
 			"namespace": {
@@ -88,6 +93,7 @@ const (
 	typeString  = "string"
 	typeInteger = "integer"
 	typeBoolean = "boolean"
+	typeArray   = "array"
 	typeText    = "text"
 )
 
@@ -102,16 +108,17 @@ type store struct {
 }
 
 type args struct {
-	Path      string `json:"path"`
-	Key       string `json:"key"`
-	Value     string `json:"value"`
-	Delete    bool   `json:"delete"`
-	Namespace string `json:"namespace"`
-	Prefix    string `json:"prefix"`
-	KeysOnly  bool   `json:"keys_only"`
-	Search    string `json:"search"`
-	Merge     bool   `json:"merge"`
-	Limit     int    `json:"limit"`
+	Path      string   `json:"path"`
+	Key       string   `json:"key"`
+	Value     string   `json:"value"`
+	Items     []string `json:"items"`
+	Delete    bool     `json:"delete"`
+	Namespace string   `json:"namespace"`
+	Prefix    string   `json:"prefix"`
+	KeysOnly  bool     `json:"keys_only"`
+	Search    string   `json:"search"`
+	Merge     bool     `json:"merge"`
+	Limit     int      `json:"limit"`
 }
 
 // storePath returns the memory file path for a project directory. Overridable for tests.
@@ -162,6 +169,11 @@ func dispatch(mem store, path string, input args) (*server.ToolCallResult, error
 	// Delete.
 	if input.Delete && input.Key != "" {
 		return handleDelete(mem, path, input.Key)
+	}
+
+	// Batch save.
+	if len(input.Items) > 0 {
+		return handleSaveMany(mem, path, input.Items, input.Namespace, input.Merge)
 	}
 
 	// Save.
@@ -238,6 +250,84 @@ func handleSave(mem store, path, key, value string, merge bool) (*server.ToolCal
 	server.EnsureGitignore(root)
 
 	return textResult(fmt.Sprintf("Saved %q.", key)), nil
+}
+
+// handleSaveMany upserts/merges every "key=value" item and persists once.
+// Bad items are skipped and reported; nothing saved is an error.
+func handleSaveMany(mem store, path string, items []string, namespace string, merge bool) (*server.ToolCallResult, error) {
+	var (
+		saved  []string
+		issues []string
+	)
+
+	for _, item := range items {
+		key, value, ok := strings.Cut(item, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+
+		if !ok || key == "" {
+			issues = append(issues, fmt.Sprintf("%q: want key=value", item))
+
+			continue
+		}
+
+		if value == "" {
+			issues = append(issues, key+": empty value")
+
+			continue
+		}
+
+		if namespace != "" {
+			key = namespace + "." + key
+		}
+
+		if merge {
+			mem = mergeEntry(mem, key, value)
+		} else {
+			mem = upsert(mem, key, value)
+		}
+
+		saved = append(saved, key)
+	}
+
+	if len(saved) == 0 {
+		return nil, fmt.Errorf("nothing saved: %s", strings.Join(issues, "; "))
+	}
+
+	err := save(path, mem)
+	if err != nil {
+		return nil, err
+	}
+
+	root := filepath.Dir(filepath.Dir(path)) // memory.json is at root/.llm/memory.json.
+	server.EnsureGitignore(root)
+
+	text := fmt.Sprintf("Saved %s: %s", keyCount(len(saved)), strings.Join(capList(saved, 5), ", "))
+	if len(issues) > 0 {
+		text += "\nskipped: " + strings.Join(issues, "; ")
+	}
+
+	return textResult(text), nil
+}
+
+func keyCount(n int) string {
+	if n == 1 {
+		return "1 key"
+	}
+
+	return fmt.Sprintf("%d keys", n)
+}
+
+// capList keeps up to n items, noting the remainder.
+func capList(items []string, n int) []string {
+	if len(items) <= n {
+		return items
+	}
+
+	out := make([]string, 0, n+1)
+	out = append(out, items[:n]...)
+	out = append(out, fmt.Sprintf("+%d more", len(items)-n))
+
+	return out
 }
 
 // handleRecall returns the value for an exact key match.
